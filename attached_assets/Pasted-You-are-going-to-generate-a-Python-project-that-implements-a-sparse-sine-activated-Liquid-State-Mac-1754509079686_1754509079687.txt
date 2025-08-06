@@ -1,0 +1,63 @@
+You are going to generate a Python project that implements a sparse, sine-activated Liquid State Machine (LSM) for next-token prediction on dialogue data. Follow these requirements exactly:
+
+Environment & Dependencies
+
+Use Python 3.9+.
+Create a requirements.txt including at least:
+numpy
+pandas
+tensorflow>=2.10
+scikit-learn
+requests
+Provide a README.md that describes how to install dependencies, where to put the HuggingFace dataset URL, and how to run training and evaluation.
+Project Structure
+. ├── data_loader.py ├── reservoir.py ├── rolling_wave.py ├── cnn_model.py ├── train.py ├── main.py ├── requirements.txt └── README.md
+
+data_loader.py
+
+Download and cache the CSV from
+https://huggingface.co/datasets/google/Synthetic-Persona-Chat/resolve/main/data/Synthetic-Persona-Chat_train.csv.
+Parse dialogue turns into token sequences.
+Use an off-the-shelf tokenizer (e.g. from TensorFlow Text or HuggingFace Tokenizers) to convert tokens to fixed-size embeddings.
+Implement load_data(window_size: int, test_size: float) → (X_train, y_train, X_test, y_test).
+reservoir.py
+Implement SparseDense as a Keras Layer with a fixed binary mask on its kernel.
+Implement ParametricSineActivation as a Keras Layer that learns three scalars: frequency ω, amplitude A, decay α, and computes
+output = A * exp(-α * |x|) * sin(ω * x).
+Provide a helper build_reservoir(input_dim, hidden_units: List[int], masks: List[np.ndarray]) → tf.keras.Model that stacks SparseDense + ParametricSineActivation layers.
+rolling_wave.py
+Define RollingWaveBuffer(window_size: int) which:
+Maintains an internal window_size × window_size NumPy array.
+Has a method append_wave(wave: np.ndarray) that:
+Shifts the incoming 1-D wave right by the current timestep index (prepend zeros).
+Truncates to window_size.
+Stores it in the next row.
+After N appends (N ≤ window_size), the buffer holds the LSM’s 2-D waveform.
+cnn_model.py
+Implement a small Keras CNN (tf.keras.Sequential or Functional API) that:
+Takes a single-channel window_size×window_size×1 input.
+Has at least two Conv2D layers + pooling + flatten + Dense to output an embedding of the same size as the token embeddings.
+Compile with MSE loss to predict next-token embeddings.
+train.py
+Tie everything together:
+Load and split data via data_loader.
+Build the reservoir model and the rolling-wave buffer.
+For each input sequence (length = window_size):
+Reset the buffer.
+For t in [0..window_size-1]:
+Pass embedding through reservoir → get sine outputs (concatenate or sum over layers to a 1-D wave).
+Append to buffer.
+Stack buffer → shape (window_size, window_size, 1).
+Train/evaluate the CNN to predict the embedding of the next token.
+Print train/test MSE per epoch.
+main.py
+Provide a CLI (e.g. using argparse) to select:
+--window_size
+--batch_size
+--epochs
+Paths to any pre-trained models.
+Calls train.py or evaluation routines accordingly.
+README.md
+Explain the LSM concept, rolling-wave encoding, and how to run the project locally.
+Show example commands to train and evaluate.
+Make sure all random seeds are set for reproducibility. After scaffolding, the code should run on Replit (with GPU if available) to download data, build models, and train, printing training and test MSE for each epoch.

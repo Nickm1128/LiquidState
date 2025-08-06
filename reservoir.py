@@ -31,15 +31,23 @@ class SparseDense(layers.Layer):
             trainable=True
         )
         
-        # Create or use provided mask
+        # Create or use provided mask as a Variable to avoid graph scope issues
         if self._mask is not None:
             if self._mask.shape != (input_dim, self.units):
                 raise ValueError(f"Mask shape {self._mask.shape} doesn't match kernel shape {(input_dim, self.units)}")
-            self.mask = tf.constant(self._mask, dtype=tf.float32)
+            mask_array = self._mask.astype(np.float32)
         else:
             # Generate random sparse mask
             mask = np.random.random((input_dim, self.units)) < self.sparsity
-            self.mask = tf.constant(mask.astype(np.float32))
+            mask_array = mask.astype(np.float32)
+            
+        # Use add_weight to create mask as a non-trainable variable with proper initialization
+        self.mask = self.add_weight(
+            name='mask',
+            shape=(input_dim, self.units),
+            initializer=keras.initializers.Constant(mask_array),
+            trainable=False
+        )
         
         if self.use_bias:
             self.bias = self.add_weight(
