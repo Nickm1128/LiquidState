@@ -1,0 +1,491 @@
+import os
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
+import pandas as pd
+from typing import Tuple, Dict, List
+import time
+from datetime import datetime
+
+from data_loader import load_data
+from reservoir import build_reservoir
+from advanced_reservoir import create_advanced_reservoir
+from rolling_wave import RollingWaveBuffer, MultiChannelRollingWaveBuffer
+from cnn_model import create_cnn_model, compile_cnn_model, create_residual_cnn_model
+
+def set_random_seeds(seed: int = 42):
+    """Set random seeds for reproducibility."""
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)
+
+class LSMTrainer:
+    """
+    Main trainer class that integrates reservoir computing with CNN for next-token prediction.
+    """
+    
+    def __init__(self, window_size: int = 10, embedding_dim: int = 128,
+                 reservoir_units: List[int] = None, sparsity: float = 0.1,
+                 use_multichannel: bool = True, reservoir_type: str = 'standard',
+                 reservoir_config: Dict = None):
+        """
+        Initialize the LSM trainer.
+        
+        Args:
+            window_size: Size of temporal window for sequences
+            embedding_dim: Dimension of token embeddings
+            reservoir_units: List of hidden units for reservoir layers (for standard reservoir)
+            sparsity: Sparsity level for reservoir connections
+            use_multichannel: Whether to use multi-channel rolling wave buffer
+            reservoir_type: Type of reservoir ('standard', 'hierarchical', 'attentive', 'echo_state', 'deep')
+            reservoir_config: Configuration dictionary for advanced reservoirs
+        """
+        self.window_size = window_size
+        self.embedding_dim = embedding_dim
+        self.reservoir_units = reservoir_units or [256, 128, 64]
+        self.sparsity = sparsity
+        self.use_multichannel = use_multichannel
+        self.reservoir_type = reservoir_type
+        self.reservoir_config = reservoir_config or {}
+        
+        # Models
+        self.reservoir = None
+        self.cnn_model = None
+        
+        # Training history
+        self.history = {
+            'train_mse': [],
+            'test_mse': [],
+            'train_mae': [],
+            'test_mae': [],
+            'epoch_times': []
+        }
+        
+        # Set random seeds
+        set_random_seeds()
+        
+    def build_models(self):
+        """Build reservoir and CNN models."""
+        print(f"Building {self.reservoir_type} reservoir model...")
+        
+        if self.reservoir_type == 'standard':
+            self.reservoir = build_reservoir(
+                input_dim=self.embedding_dim,
+                hidden_units=self.reservoir_units,
+                sparsity=self.sparsity
+            )
+            reservoir_output_dim = self.reservoir_units[-1]
+        else:
+            # Advanced reservoir architectures
+            self.reservoir = create_advanced_reservoir(
+                architecture_type=self.reservoir_type,
+                input_dim=self.embedding_dim,
+                **self.reservoir_config
+            )
+            # Calculate output dimension based on reservoir type
+            reservoir_output_dim = self._calculate_reservoir_output_dim()
+        
+        print("Building CNN model...")
+        num_channels = self._calculate_num_channels(reservoir_output_dim)
+        self.cnn_model = create_cnn_model(
+            window_size=self.window_size,
+            embedding_dim=self.embedding_dim,
+            num_channels=num_channels
+        )
+        self.cnn_model = compile_cnn_model(self.cnn_model)
+        
+        print("Models built successfully!")
+        print(f"Reservoir type: {self.reservoir_type}")
+        print(f"Reservoir output shape: {self.reservoir.output.shape}")
+        print(f"CNN input shape: {self.cnn_model.input.shape}")
+        print(f"CNN output shape: {self.cnn_model.output.shape}")
+    
+    def _calculate_reservoir_output_dim(self) -> int:
+        """Calculate the output dimension of the reservoir based on its type."""
+        if self.reservoir_type == 'hierarchical':
+            scales = self.reservoir_config.get('scales', [
+                {'units': 128}, {'units': 96}, {'units': 64}
+            ])
+            return sum(scale['units'] for scale in scales)
+        elif self.reservoir_type == 'attentive':
+            return self.reservoir_config.get('units', 256)
+        elif self.reservoir_type == 'echo_state':
+            return self.reservoir_config.get('units', 256)
+        elif self.reservoir_type == 'deep':
+            layer_configs = self.reservoir_config.get('layer_configs', [
+                {'units': 256}, {'units': 128}, {'units': 64}
+            ])
+            return sum(config['units'] for config in layer_configs)
+        else:
+            return 256  # Default fallback
+    
+    def _calculate_num_channels(self, reservoir_output_dim: int) -> int:
+        """Calculate number of channels for rolling wave buffer."""
+        if not self.use_multichannel:
+            return 1
+        
+        if self.reservoir_type == 'standard':
+            return len(self.reservoir_units)
+        elif self.reservoir_type == 'hierarchical':
+            return len(self.reservoir_config.get('scales', [{'units': 128}, {'units': 96}, {'units': 64}]))
+        elif self.reservoir_type == 'deep':
+            return len(self.reservoir_config.get('layer_configs', [{'units': 256}, {'units': 128}, {'units': 64}]))
+        else:
+            # For attentive and echo_state, use single channel but larger dimension
+            return 1
+    
+    def process_sequence_to_waveform(self, sequence: np.ndarray) -> np.ndarray:
+        """
+        Process a single sequence through the reservoir to create 2D waveform.
+        
+        Args:
+            sequence: Input sequence of shape (window_size, embedding_dim)
+            
+        Returns:
+            2D waveform of shape (window_size, window_size, channels)
+        """
+        num_channels = self._calculate_num_channels(self._calculate_reservoir_output_dim())
+        
+        if self.use_multichannel and num_channels > 1:
+            # Multi-channel approach
+            buffer = MultiChannelRollingWaveBuffer(
+                window_size=self.window_size,
+                num_channels=num_channels
+            )
+            buffer.reset()
+            
+            # Process each timestep
+            for t in range(self.window_size):
+                timestep_embedding = sequence[t:t+1]  # Shape: (1, embedding_dim)
+                
+                # Get outputs based on reservoir type
+                layer_outputs = self._extract_layer_outputs(timestep_embedding)
+                
+                # Append to buffer
+                buffer.append_waves(layer_outputs)
+            
+            return buffer.get_buffer_3d()
+        
+        else:
+            # Single channel approach
+            buffer = RollingWaveBuffer(window_size=self.window_size)
+            buffer.reset()
+            
+            # Process each timestep
+            for t in range(self.window_size):
+                timestep_embedding = sequence[t:t+1]  # Shape: (1, embedding_dim)
+                
+                # Get reservoir output
+                reservoir_output = self.reservoir(timestep_embedding)
+                wave = reservoir_output.numpy().flatten()
+                
+                # Append to buffer
+                buffer.append_wave(wave)
+            
+            return buffer.get_buffer_3d()
+    
+    def _extract_layer_outputs(self, timestep_embedding: tf.Tensor) -> List[np.ndarray]:
+        """Extract layer-wise outputs from reservoir for multi-channel processing."""
+        if self.reservoir_type == 'standard':
+            # Extract outputs from each layer in standard reservoir
+            layer_outputs = []
+            x = timestep_embedding
+            for i, layer in enumerate(self.reservoir.layers):
+                if hasattr(layer, 'units'):  # Dense or SparseDense layer
+                    x = layer(x)
+                    # Get the output after sine activation (next layer)
+                    if i + 1 < len(self.reservoir.layers):
+                        x = self.reservoir.layers[i + 1](x)
+                        layer_outputs.append(x.numpy().flatten())
+                    i += 1  # Skip sine activation layer in next iteration
+            
+            # Ensure we have the right number of outputs
+            if len(layer_outputs) != len(self.reservoir_units):
+                final_output = self.reservoir(timestep_embedding).numpy().flatten()
+                layer_outputs = [final_output[i::len(self.reservoir_units)] 
+                               for i in range(len(self.reservoir_units))]
+            
+            return layer_outputs
+            
+        elif self.reservoir_type == 'hierarchical':
+            # Extract outputs from each hierarchical scale
+            reservoir_output = self.reservoir(timestep_embedding)
+            scales = self.reservoir_config.get('scales', [
+                {'units': 128}, {'units': 96}, {'units': 64}
+            ])
+            
+            outputs = []
+            start_idx = 0
+            for scale in scales:
+                end_idx = start_idx + scale['units']
+                scale_output = reservoir_output[:, start_idx:end_idx].numpy().flatten()
+                outputs.append(scale_output)
+                start_idx = end_idx
+            
+            return outputs
+            
+        elif self.reservoir_type == 'deep':
+            # Extract outputs from each deep layer
+            layer_configs = self.reservoir_config.get('layer_configs', [
+                {'units': 256}, {'units': 128}, {'units': 64}
+            ])
+            
+            # For deep reservoir, we need to access intermediate layer outputs
+            # This is a simplified version - in practice, you might want to store 
+            # intermediate outputs during forward pass
+            reservoir_output = self.reservoir(timestep_embedding).numpy().flatten()
+            
+            outputs = []
+            start_idx = 0
+            for config in layer_configs:
+                end_idx = start_idx + config['units']
+                layer_output = reservoir_output[start_idx:end_idx]
+                outputs.append(layer_output)
+                start_idx = end_idx
+            
+            return outputs
+            
+        else:
+            # For attentive and echo_state reservoirs, use single output
+            reservoir_output = self.reservoir(timestep_embedding).numpy().flatten()
+            return [reservoir_output]
+    
+    def create_training_data(self, X: np.ndarray, y: np.ndarray, 
+                           batch_size: int = 32) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Convert input sequences to 2D waveforms for CNN training.
+        
+        Args:
+            X: Input sequences of shape (num_samples, window_size, embedding_dim)
+            y: Target embeddings of shape (num_samples, embedding_dim)
+            batch_size: Batch size for processing (to manage memory)
+            
+        Returns:
+            X_waveforms: 2D waveforms for CNN input
+            y: Target embeddings (unchanged)
+        """
+        print(f"Converting {len(X)} sequences to waveforms...")
+        
+        num_samples = len(X)
+        if self.use_multichannel:
+            waveform_shape = (num_samples, self.window_size, self.window_size, len(self.reservoir_units))
+        else:
+            waveform_shape = (num_samples, self.window_size, self.window_size, 1)
+        
+        X_waveforms = np.zeros(waveform_shape, dtype=np.float32)
+        
+        # Process in batches to manage memory
+        for i in range(0, num_samples, batch_size):
+            end_i = min(i + batch_size, num_samples)
+            batch_X = X[i:end_i]
+            
+            print(f"Processing batch {i//batch_size + 1}/{(num_samples + batch_size - 1)//batch_size}")
+            
+            for j, sequence in enumerate(batch_X):
+                waveform = self.process_sequence_to_waveform(sequence)
+                X_waveforms[i + j] = waveform
+        
+        return X_waveforms, y
+    
+    def train(self, X_train: np.ndarray, y_train: np.ndarray,
+              X_test: np.ndarray, y_test: np.ndarray,
+              epochs: int = 10, batch_size: int = 32,
+              validation_split: float = 0.1) -> Dict:
+        """
+        Train the complete LSM + CNN system.
+        
+        Args:
+            X_train: Training sequences
+            y_train: Training targets
+            X_test: Test sequences
+            y_test: Test targets
+            epochs: Number of training epochs
+            batch_size: Training batch size
+            validation_split: Fraction of training data for validation
+            
+        Returns:
+            Training history dictionary
+        """
+        print("Starting LSM training...")
+        
+        # Build models if not already built
+        if self.reservoir is None or self.cnn_model is None:
+            self.build_models()
+        
+        # Convert sequences to waveforms
+        print("Creating training waveforms...")
+        X_train_waveforms, y_train = self.create_training_data(X_train, y_train, batch_size)
+        
+        print("Creating test waveforms...")
+        X_test_waveforms, y_test = self.create_training_data(X_test, y_test, batch_size)
+        
+        # Set up callbacks
+        callbacks = [
+            keras.callbacks.EarlyStopping(
+                monitor='val_loss',
+                patience=5,
+                restore_best_weights=True,
+                verbose=1
+            ),
+            keras.callbacks.ReduceLROnPlateau(
+                monitor='val_loss',
+                factor=0.5,
+                patience=3,
+                verbose=1,
+                min_lr=1e-6
+            )
+        ]
+        
+        # Train CNN
+        print("Training CNN on waveforms...")
+        start_time = time.time()
+        
+        history = self.cnn_model.fit(
+            X_train_waveforms, y_train,
+            validation_split=validation_split,
+            epochs=epochs,
+            batch_size=batch_size,
+            callbacks=callbacks,
+            verbose=1
+        )
+        
+        training_time = time.time() - start_time
+        
+        # Evaluate on test set
+        print("Evaluating on test set...")
+        test_loss, test_mae, test_mse = self.cnn_model.evaluate(
+            X_test_waveforms, y_test, verbose=0
+        )
+        
+        # Update history
+        self.history['train_mse'].extend(history.history['mse'])
+        self.history['train_mae'].extend(history.history['mae'])
+        if 'val_mse' in history.history:
+            self.history['test_mse'].extend(history.history['val_mse'])
+            self.history['test_mae'].extend(history.history['val_mae'])
+        
+        # Print final results
+        print(f"\nTraining completed in {training_time:.2f} seconds")
+        print(f"Final test MSE: {test_mse:.6f}")
+        print(f"Final test MAE: {test_mae:.6f}")
+        
+        return {
+            'history': history.history,
+            'test_mse': test_mse,
+            'test_mae': test_mae,
+            'training_time': training_time
+        }
+    
+    def predict(self, X: np.ndarray, batch_size: int = 32) -> np.ndarray:
+        """Make predictions on new sequences."""
+        X_waveforms, _ = self.create_training_data(X, np.zeros((len(X), self.embedding_dim)), batch_size)
+        return self.cnn_model.predict(X_waveforms, batch_size=batch_size)
+    
+    def save_models(self, save_dir: str = "saved_models"):
+        """Save trained models."""
+        os.makedirs(save_dir, exist_ok=True)
+        
+        if self.reservoir is not None:
+            self.reservoir.save(os.path.join(save_dir, "reservoir_model"))
+        
+        if self.cnn_model is not None:
+            self.cnn_model.save(os.path.join(save_dir, "cnn_model"))
+        
+        # Save training history
+        history_df = pd.DataFrame(self.history)
+        history_df.to_csv(os.path.join(save_dir, "training_history.csv"), index=False)
+        
+        print(f"Models saved to {save_dir}")
+    
+    def load_models(self, save_dir: str = "saved_models"):
+        """Load pre-trained models."""
+        reservoir_path = os.path.join(save_dir, "reservoir_model")
+        cnn_path = os.path.join(save_dir, "cnn_model")
+        
+        if os.path.exists(reservoir_path):
+            self.reservoir = keras.models.load_model(reservoir_path)
+            print("Reservoir model loaded")
+        
+        if os.path.exists(cnn_path):
+            self.cnn_model = keras.models.load_model(cnn_path)
+            print("CNN model loaded")
+        
+        # Load training history if exists
+        history_path = os.path.join(save_dir, "training_history.csv")
+        if os.path.exists(history_path):
+            history_df = pd.read_csv(history_path)
+            for col in history_df.columns:
+                if col in self.history:
+                    self.history[col] = history_df[col].tolist()
+
+def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
+                test_size: float = 0.2, embedding_dim: int = 128,
+                reservoir_type: str = 'standard', reservoir_config: Dict = None) -> Dict:
+    """
+    Main training function that ties everything together.
+    
+    Args:
+        window_size: Size of sequence windows
+        batch_size: Training batch size
+        epochs: Number of training epochs
+        test_size: Fraction of data for testing
+        embedding_dim: Token embedding dimension
+        reservoir_type: Type of reservoir architecture
+        reservoir_config: Configuration for advanced reservoirs
+        
+    Returns:
+        Training results dictionary
+    """
+    print("="*80)
+    print(f"LIQUID STATE MACHINE TRAINING - {reservoir_type.upper()} RESERVOIR")
+    print("="*80)
+    
+    # Load and prepare data
+    print("Loading data...")
+    X_train, y_train, X_test, y_test = load_data(
+        window_size=window_size,
+        test_size=test_size,
+        embedding_dim=embedding_dim
+    )
+    
+    print(f"Data loaded: Train={X_train.shape}, Test={X_test.shape}")
+    
+    # Initialize trainer with advanced reservoir support
+    trainer = LSMTrainer(
+        window_size=window_size,
+        embedding_dim=embedding_dim,
+        reservoir_units=[256, 128, 64],
+        sparsity=0.1,
+        use_multichannel=True,
+        reservoir_type=reservoir_type,
+        reservoir_config=reservoir_config or {}
+    )
+    
+    # Train the model
+    results = trainer.train(
+        X_train, y_train, X_test, y_test,
+        epochs=epochs,
+        batch_size=batch_size,
+        validation_split=0.1
+    )
+    
+    # Save models
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_dir = f"models_{timestamp}"
+    trainer.save_models(save_dir)
+    
+    return results
+
+if __name__ == "__main__":
+    # Run training with default parameters
+    results = run_training(
+        window_size=8,
+        batch_size=16,
+        epochs=15,
+        test_size=0.2,
+        embedding_dim=128
+    )
+    
+    print("\nTraining completed!")
+    print(f"Final test MSE: {results['test_mse']:.6f}")
+    print(f"Final test MAE: {results['test_mae']:.6f}")
