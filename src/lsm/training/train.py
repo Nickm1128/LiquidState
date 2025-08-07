@@ -3,15 +3,23 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 import pandas as pd
-from typing import Tuple, Dict, List
+from typing import Tuple, Dict, List, Any
 import time
 from datetime import datetime
 
-from data_loader import load_data
-from reservoir import build_reservoir
-from advanced_reservoir import create_advanced_reservoir
-from rolling_wave import RollingWaveBuffer, MultiChannelRollingWaveBuffer
-from cnn_model import create_cnn_model, compile_cnn_model, create_residual_cnn_model
+from ..data.data_loader import load_data, DialogueTokenizer
+from ..core.reservoir import build_reservoir
+from ..core.advanced_reservoir import create_advanced_reservoir
+from ..core.rolling_wave import RollingWaveBuffer, MultiChannelRollingWaveBuffer
+from ..core.cnn_model import create_cnn_model, compile_cnn_model, create_residual_cnn_model
+from .model_config import ModelConfiguration, TrainingMetadata
+from lsm_exceptions import (
+    ModelLoadError, ModelSaveError, TrainingSetupError, TrainingExecutionError,
+    ConfigurationError, handle_file_operation_error
+)
+from lsm_logging import get_logger, log_performance, create_operation_logger
+
+logger = get_logger(__name__)
 
 def set_random_seeds(seed: int = 42):
     """Set random seeds for reproducibility."""
@@ -267,12 +275,16 @@ class LSMTrainer:
         print(f"Converting {len(X)} sequences to waveforms...")
         
         num_samples = len(X)
-        if self.use_multichannel:
-            waveform_shape = (num_samples, self.window_size, self.window_size, len(self.reservoir_units))
-        else:
-            waveform_shape = (num_samples, self.window_size, self.window_size, 1)
+        num_channels = self._calculate_num_channels(self._calculate_reservoir_output_dim())
+        waveform_shape = (num_samples, self.window_size, self.window_size, num_channels)
         
-        X_waveforms = np.zeros(waveform_shape, dtype=np.float32)
+        # Use memory-mapped array for large datasets
+        if num_samples > 1000:
+            import tempfile
+            temp_file = tempfile.NamedTemporaryFile(delete=False)
+            X_waveforms = np.memmap(temp_file.name, dtype=np.float32, mode='w+', shape=waveform_shape)
+        else:
+            X_waveforms = np.zeros(waveform_shape, dtype=np.float32)
         
         # Process in batches to manage memory
         for i in range(0, num_samples, batch_size):
@@ -381,8 +393,188 @@ class LSMTrainer:
         X_waveforms, _ = self.create_training_data(X, np.zeros((len(X), self.embedding_dim)), batch_size)
         return self.cnn_model.predict(X_waveforms, batch_size=batch_size)
     
+    def save_complete_model(self, save_dir: str, tokenizer: DialogueTokenizer, 
+                           training_results: Dict = None, dataset_info: Dict = None) -> None:
+        """
+        Save complete model state including reservoir, CNN, tokenizer, and configuration.
+        
+        Args:
+            save_dir: Directory to save all model artifacts
+            tokenizer: Fitted tokenizer to save with the model
+            training_results: Optional training results for metadata
+            dataset_info: Optional dataset information for metadata
+        """
+        os.makedirs(save_dir, exist_ok=True)
+        
+        # Save models
+        if self.reservoir is not None:
+            reservoir_path = os.path.join(save_dir, "reservoir_model")
+            self.reservoir.save(reservoir_path)
+            print(f"✓ Reservoir model saved to {reservoir_path}")
+        
+        if self.cnn_model is not None:
+            cnn_path = os.path.join(save_dir, "cnn_model")
+            self.cnn_model.save(cnn_path)
+            print(f"✓ CNN model saved to {cnn_path}")
+        
+        # Save tokenizer
+        if tokenizer is not None and tokenizer.is_fitted:
+            tokenizer_path = os.path.join(save_dir, "tokenizer")
+            tokenizer.save(tokenizer_path)
+            print(f"✓ Tokenizer saved to {tokenizer_path}")
+        
+        # Create and save configuration
+        config = ModelConfiguration(
+            window_size=self.window_size,
+            embedding_dim=self.embedding_dim,
+            reservoir_type=self.reservoir_type,
+            reservoir_config=self.reservoir_config,
+            reservoir_units=self.reservoir_units,
+            sparsity=self.sparsity,
+            use_multichannel=self.use_multichannel,
+            tokenizer_max_features=tokenizer.max_features if tokenizer else 10000,
+            tokenizer_ngram_range=(1, 2)  # Default from tokenizer
+        )
+        
+        config_path = os.path.join(save_dir, "config.json")
+        config.save(config_path)
+        print(f"✓ Configuration saved to {config_path}")
+        
+        # Save training history
+        if self.history:
+            history_df = pd.DataFrame(self.history)
+            history_path = os.path.join(save_dir, "training_history.csv")
+            history_df.to_csv(history_path, index=False)
+            print(f"✓ Training history saved to {history_path}")
+        
+        # Save training metadata if provided
+        if training_results and dataset_info:
+            metadata = TrainingMetadata.create_from_training(training_results, dataset_info)
+            metadata_path = os.path.join(save_dir, "metadata.json")
+            metadata.save(metadata_path)
+            print(f"✓ Training metadata saved to {metadata_path}")
+        
+        print(f"🎉 Complete model saved to {save_dir}")
+    
+    def load_complete_model(self, save_dir: str) -> Tuple['LSMTrainer', DialogueTokenizer]:
+        """
+        Load complete model state including configuration and tokenizer.
+        
+        Args:
+            save_dir: Directory containing saved model artifacts
+            
+        Returns:
+            Tuple of (loaded_trainer, loaded_tokenizer)
+        """
+        if not os.path.exists(save_dir):
+            raise ModelLoadError(save_dir, "Model directory does not exist")
+        
+        # Load configuration
+        config_path = os.path.join(save_dir, "config.json")
+        if os.path.exists(config_path):
+            config = ModelConfiguration.load(config_path)
+            print(f"✓ Configuration loaded from {config_path}")
+            
+            # Update trainer parameters from config
+            self.window_size = config.window_size
+            self.embedding_dim = config.embedding_dim
+            self.reservoir_type = config.reservoir_type
+            self.reservoir_config = config.reservoir_config
+            self.reservoir_units = config.reservoir_units
+            self.sparsity = config.sparsity
+            self.use_multichannel = config.use_multichannel
+        else:
+            print("⚠ No configuration file found, using current trainer settings")
+        
+        # Load models
+        reservoir_path = os.path.join(save_dir, "reservoir_model")
+        if os.path.exists(reservoir_path):
+            self.reservoir = keras.models.load_model(reservoir_path)
+            print(f"✓ Reservoir model loaded from {reservoir_path}")
+        else:
+            print("⚠ No reservoir model found")
+        
+        cnn_path = os.path.join(save_dir, "cnn_model")
+        if os.path.exists(cnn_path):
+            self.cnn_model = keras.models.load_model(cnn_path)
+            print(f"✓ CNN model loaded from {cnn_path}")
+        else:
+            print("⚠ No CNN model found")
+        
+        # Load tokenizer
+        tokenizer_path = os.path.join(save_dir, "tokenizer")
+        tokenizer = DialogueTokenizer(embedding_dim=self.embedding_dim)
+        
+        if os.path.exists(tokenizer_path):
+            tokenizer.load(tokenizer_path)
+            print(f"✓ Tokenizer loaded from {tokenizer_path}")
+        else:
+            print("⚠ No tokenizer found - you'll need to fit it on your data")
+        
+        # Load training history if exists
+        history_path = os.path.join(save_dir, "training_history.csv")
+        if os.path.exists(history_path):
+            history_df = pd.read_csv(history_path)
+            for col in history_df.columns:
+                if col in self.history:
+                    self.history[col] = history_df[col].tolist()
+            print(f"✓ Training history loaded from {history_path}")
+        
+        return self, tokenizer
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """
+        Get comprehensive information about the current model state.
+        
+        Returns:
+            Dictionary containing model information
+        """
+        info = {
+            'architecture': {
+                'window_size': self.window_size,
+                'embedding_dim': self.embedding_dim,
+                'reservoir_type': self.reservoir_type,
+                'reservoir_config': self.reservoir_config,
+                'reservoir_units': self.reservoir_units,
+                'sparsity': self.sparsity,
+                'use_multichannel': self.use_multichannel
+            },
+            'model_state': {
+                'reservoir_loaded': self.reservoir is not None,
+                'cnn_loaded': self.cnn_model is not None,
+                'has_training_history': len(self.history.get('train_mse', [])) > 0
+            }
+        }
+        
+        # Add model shapes if available
+        if self.reservoir is not None:
+            info['model_state']['reservoir_input_shape'] = str(self.reservoir.input.shape)
+            info['model_state']['reservoir_output_shape'] = str(self.reservoir.output.shape)
+        
+        if self.cnn_model is not None:
+            info['model_state']['cnn_input_shape'] = str(self.cnn_model.input.shape)
+            info['model_state']['cnn_output_shape'] = str(self.cnn_model.output.shape)
+        
+        # Add training history summary if available
+        if self.history.get('train_mse'):
+            info['training_summary'] = {
+                'epochs_trained': len(self.history['train_mse']),
+                'final_train_mse': float(self.history['train_mse'][-1]),
+                'final_train_mae': float(self.history['train_mae'][-1]) if self.history.get('train_mae') else None,
+                'best_train_mse': float(min(self.history['train_mse']))
+            }
+            
+            if self.history.get('test_mse'):
+                info['training_summary'].update({
+                    'final_test_mse': float(self.history['test_mse'][-1]),
+                    'final_test_mae': float(self.history['test_mae'][-1]) if self.history.get('test_mae') else None,
+                    'best_test_mse': float(min(self.history['test_mse']))
+                })
+        
+        return info
+    
     def save_models(self, save_dir: str = "saved_models"):
-        """Save trained models."""
+        """Save trained models (legacy method - use save_complete_model for new code)."""
         os.makedirs(save_dir, exist_ok=True)
         
         if self.reservoir is not None:
@@ -398,7 +590,7 @@ class LSMTrainer:
         print(f"Models saved to {save_dir}")
     
     def load_models(self, save_dir: str = "saved_models"):
-        """Load pre-trained models."""
+        """Load pre-trained models (legacy method - use load_complete_model for new code)."""
         reservoir_path = os.path.join(save_dir, "reservoir_model")
         cnn_path = os.path.join(save_dir, "cnn_model")
         
@@ -418,6 +610,7 @@ class LSMTrainer:
                 if col in self.history:
                     self.history[col] = history_df[col].tolist()
 
+@log_performance("LSM training")
 def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
                 test_size: float = 0.2, embedding_dim: int = 128,
                 reservoir_type: str = 'standard', reservoir_config: Dict = None) -> Dict:
@@ -436,19 +629,73 @@ def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
     Returns:
         Training results dictionary
     """
+    # Validate input parameters
+    from input_validation import (
+        validate_positive_integer, validate_positive_float, 
+        validate_training_parameters, create_helpful_error_message
+    )
+    
+    try:
+        window_size = validate_positive_integer(window_size, "window_size", min_value=1, max_value=100)
+        batch_size = validate_positive_integer(batch_size, "batch_size", min_value=1, max_value=1024)
+        epochs = validate_positive_integer(epochs, "epochs", min_value=1, max_value=1000)
+        test_size = validate_positive_float(test_size, "test_size", min_value=0.01, max_value=0.9)
+        embedding_dim = validate_positive_integer(embedding_dim, "embedding_dim", min_value=1, max_value=2048)
+        
+        valid_reservoir_types = ['standard', 'hierarchical', 'attentive', 'echo_state', 'deep']
+        if reservoir_type not in valid_reservoir_types:
+            raise ConfigurationError(f"Invalid reservoir_type: {reservoir_type}. Valid types: {valid_reservoir_types}")
+            
+    except Exception as e:
+        error_msg = create_helpful_error_message(
+            "Training parameter validation",
+            e,
+            [
+                "Check that all numeric parameters are positive",
+                "Ensure test_size is between 0.01 and 0.9",
+                f"Use one of these reservoir types: {valid_reservoir_types}"
+            ]
+        )
+        logger.error(error_msg)
+        raise TrainingSetupError(str(e))
+    
+    logger.info("Starting LSM training", 
+                window_size=window_size, 
+                batch_size=batch_size, 
+                epochs=epochs,
+                reservoir_type=reservoir_type)
+    
     print("="*80)
     print(f"LIQUID STATE MACHINE TRAINING - {reservoir_type.upper()} RESERVOIR")
     print("="*80)
     
     # Load and prepare data
     print("Loading data...")
-    X_train, y_train, X_test, y_test = load_data(
-        window_size=window_size,
-        test_size=test_size,
-        embedding_dim=embedding_dim
-    )
-    
-    print(f"Data loaded: Train={X_train.shape}, Test={X_test.shape}")
+    try:
+        X_train, y_train, X_test, y_test, tokenizer = load_data(
+            window_size=window_size,
+            test_size=test_size,
+            embedding_dim=embedding_dim
+        )
+        
+        print(f"Data loaded: Train={X_train.shape}, Test={X_test.shape}")
+        logger.info("Data loading completed successfully", 
+                   train_shape=X_train.shape, 
+                   test_shape=X_test.shape)
+        
+    except Exception as e:
+        logger.exception("Data loading failed")
+        error_msg = create_helpful_error_message(
+            "Data loading",
+            e,
+            [
+                "Check that the dataset file exists and is readable",
+                "Ensure sufficient memory is available for data processing",
+                "Verify that the data format is correct"
+            ]
+        )
+        print(error_msg)
+        raise TrainingSetupError(f"Data loading failed: {e}")
     
     # Initialize trainer with advanced reservoir support
     trainer = LSMTrainer(
@@ -469,10 +716,21 @@ def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
         validation_split=0.1
     )
     
-    # Save models
+    # Save models with complete state
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_dir = f"models_{timestamp}"
-    trainer.save_models(save_dir)
+    
+    # Create dataset info for metadata
+    dataset_info = {
+        'source': 'Synthetic-Persona-Chat',
+        'num_sequences': len(X_train) + len(X_test),
+        'train_samples': len(X_train),
+        'test_samples': len(X_test),
+        'window_size': window_size,
+        'embedding_dim': embedding_dim
+    }
+    
+    trainer.save_complete_model(save_dir, tokenizer, results, dataset_info)
     
     return results
 

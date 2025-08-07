@@ -13,6 +13,11 @@ import json
 from datetime import datetime
 from typing import Dict, Any
 
+from lsm_exceptions import ModelLoadError, InvalidInputError
+from lsm_logging import get_logger, setup_default_logging
+
+logger = get_logger(__name__)
+
 import numpy as np
 import tensorflow as tf
 
@@ -96,7 +101,7 @@ def train_command(args) -> Dict[str, Any]:
 def evaluate_command(args) -> Dict[str, Any]:
     """Execute evaluation command."""
     if not os.path.exists(args.model_path):
-        raise FileNotFoundError(f"Model path {args.model_path} does not exist")
+        raise ModelLoadError(args.model_path, "Model path does not exist")
     
     print(f"Loading model from {args.model_path}")
     
@@ -109,7 +114,7 @@ def evaluate_command(args) -> Dict[str, Any]:
     
     # Load test data
     print("Loading test data...")
-    _, _, X_test, y_test = load_data(
+    _, _, X_test, y_test, _ = load_data(
         window_size=args.window_size,
         test_size=args.test_size,
         embedding_dim=args.embedding_dim
@@ -144,7 +149,7 @@ def data_info_command(args) -> Dict[str, Any]:
     print("Loading dataset information...")
     
     try:
-        X_train, y_train, X_test, y_test = load_data(
+        X_train, y_train, X_test, y_test, _ = load_data(
             window_size=args.window_size,
             test_size=args.test_size,
             embedding_dim=args.embedding_dim

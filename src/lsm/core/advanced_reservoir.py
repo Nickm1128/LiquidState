@@ -5,7 +5,11 @@ from tensorflow.keras import layers
 from typing import List, Dict, Optional, Tuple, Union
 import math
 
-from reservoir import SparseDense, ParametricSineActivation, generate_sparse_mask
+from .reservoir import SparseDense, ParametricSineActivation, generate_sparse_mask
+from ..utils.lsm_exceptions import InvalidInputError, ConfigurationError
+from ..utils.lsm_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class HierarchicalReservoir(layers.Layer):
@@ -423,7 +427,10 @@ def create_advanced_reservoir(architecture_type: str, input_dim: int, **kwargs) 
         reservoir = DeepReservoir(layer_configs=layer_configs, use_skip_connections=use_skip_connections)
         
     else:
-        raise ValueError(f"Unknown architecture type: {architecture_type}")
+        raise ConfigurationError(
+            f"Unknown architecture type: {architecture_type}",
+            {"valid_types": ["standard", "hierarchical", "attentive", "echo_state", "deep"]}
+        )
     
     outputs = reservoir(inputs)
     

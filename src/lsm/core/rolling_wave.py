@@ -1,6 +1,11 @@
 import numpy as np
 from typing import Optional
 
+from ..utils.lsm_exceptions import InvalidInputError, DataValidationError
+from ..utils.lsm_logging import get_logger
+
+logger = get_logger(__name__)
+
 class RollingWaveBuffer:
     """
     Rolling wave buffer that maintains a 2D temporal pattern of LSM outputs.
@@ -35,7 +40,11 @@ class RollingWaveBuffer:
             wave: 1D numpy array representing the current timestep's wave
         """
         if len(wave.shape) != 1:
-            raise ValueError("Wave must be a 1D array")
+            raise InvalidInputError(
+                "wave",
+                "1D array",
+                f"{len(wave.shape)}D array"
+            )
         
         # Create time-shifted wave
         shifted_wave = self._create_shifted_wave(wave)
@@ -185,7 +194,11 @@ class MultiChannelRollingWaveBuffer:
             waves: List of 1D arrays, one for each channel
         """
         if len(waves) != self.num_channels:
-            raise ValueError(f"Expected {self.num_channels} waves, got {len(waves)}")
+            raise InvalidInputError(
+                "waves",
+                f"list with {self.num_channels} waves",
+                f"list with {len(waves)} waves"
+            )
         
         for i, wave in enumerate(waves):
             self.buffers[i].append_wave(wave)

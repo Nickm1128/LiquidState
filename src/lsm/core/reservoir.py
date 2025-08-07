@@ -5,6 +5,11 @@ from tensorflow.keras import layers
 from typing import List, Optional
 import math
 
+from ..utils.lsm_exceptions import InvalidInputError, ConfigurationError
+from ..utils.lsm_logging import get_logger
+
+logger = get_logger(__name__)
+
 class SparseDense(layers.Layer):
     """
     Dense layer with sparse connectivity defined by a binary mask.
@@ -34,7 +39,11 @@ class SparseDense(layers.Layer):
         # Create or use provided mask as a Variable to avoid graph scope issues
         if self._mask is not None:
             if self._mask.shape != (input_dim, self.units):
-                raise ValueError(f"Mask shape {self._mask.shape} doesn't match kernel shape {(input_dim, self.units)}")
+                raise InvalidInputError(
+                    "mask shape",
+                    f"shape {(input_dim, self.units)}",
+                    f"shape {self._mask.shape}"
+                )
             mask_array = self._mask.astype(np.float32)
         else:
             # Generate random sparse mask
@@ -190,10 +199,18 @@ def build_reservoir(input_dim: int, hidden_units: List[int],
         Keras model representing the reservoir
     """
     if masks is not None and len(masks) != len(hidden_units):
-        raise ValueError("Number of masks must match number of hidden layers")
+        raise InvalidInputError(
+            "masks",
+            f"list with {len(hidden_units)} masks",
+            f"list with {len(masks)} masks"
+        )
     
     if sine_params is not None and len(sine_params) != len(hidden_units):
-        raise ValueError("Number of sine parameter sets must match number of hidden layers")
+        raise InvalidInputError(
+            "sine_params",
+            f"list with {len(hidden_units)} parameter sets",
+            f"list with {len(sine_params)} parameter sets"
+        )
     
     # Input layer
     inputs = keras.Input(shape=(input_dim,), name='reservoir_input')
