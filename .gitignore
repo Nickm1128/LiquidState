@@ -56,7 +56,6 @@ models_*/
 # Data files
 *.csv
 *.json
-data/
 datasets/
 
 # OS
