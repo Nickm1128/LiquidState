@@ -5,8 +5,8 @@ from tensorflow.keras import layers
 from typing import List, Optional
 import math
 
-from ..utils.lsm_exceptions import InvalidInputError, ConfigurationError
-from ..utils.lsm_logging import get_logger
+from lsm_exceptions import InvalidInputError, ConfigurationError
+from lsm_logging import get_logger
 
 logger = get_logger(__name__)
 

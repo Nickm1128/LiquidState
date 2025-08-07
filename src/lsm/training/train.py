@@ -408,12 +408,12 @@ class LSMTrainer:
         
         # Save models
         if self.reservoir is not None:
-            reservoir_path = os.path.join(save_dir, "reservoir_model")
+            reservoir_path = os.path.join(save_dir, "reservoir_model.keras")
             self.reservoir.save(reservoir_path)
             print(f"✓ Reservoir model saved to {reservoir_path}")
         
         if self.cnn_model is not None:
-            cnn_path = os.path.join(save_dir, "cnn_model")
+            cnn_path = os.path.join(save_dir, "cnn_model.keras")
             self.cnn_model.save(cnn_path)
             print(f"✓ CNN model saved to {cnn_path}")
         
@@ -487,14 +487,14 @@ class LSMTrainer:
             print("⚠ No configuration file found, using current trainer settings")
         
         # Load models
-        reservoir_path = os.path.join(save_dir, "reservoir_model")
+        reservoir_path = os.path.join(save_dir, "reservoir_model.keras")
         if os.path.exists(reservoir_path):
             self.reservoir = keras.models.load_model(reservoir_path)
             print(f"✓ Reservoir model loaded from {reservoir_path}")
         else:
             print("⚠ No reservoir model found")
         
-        cnn_path = os.path.join(save_dir, "cnn_model")
+        cnn_path = os.path.join(save_dir, "cnn_model.keras")
         if os.path.exists(cnn_path):
             self.cnn_model = keras.models.load_model(cnn_path)
             print(f"✓ CNN model loaded from {cnn_path}")
@@ -578,10 +578,10 @@ class LSMTrainer:
         os.makedirs(save_dir, exist_ok=True)
         
         if self.reservoir is not None:
-            self.reservoir.save(os.path.join(save_dir, "reservoir_model"))
+            self.reservoir.save(os.path.join(save_dir, "reservoir_model.keras"))
         
         if self.cnn_model is not None:
-            self.cnn_model.save(os.path.join(save_dir, "cnn_model"))
+            self.cnn_model.save(os.path.join(save_dir, "cnn_model.keras"))
         
         # Save training history
         history_df = pd.DataFrame(self.history)
@@ -591,8 +591,8 @@ class LSMTrainer:
     
     def load_models(self, save_dir: str = "saved_models"):
         """Load pre-trained models (legacy method - use load_complete_model for new code)."""
-        reservoir_path = os.path.join(save_dir, "reservoir_model")
-        cnn_path = os.path.join(save_dir, "cnn_model")
+        reservoir_path = os.path.join(save_dir, "reservoir_model.keras")
+        cnn_path = os.path.join(save_dir, "cnn_model.keras")
         
         if os.path.exists(reservoir_path):
             self.reservoir = keras.models.load_model(reservoir_path)
