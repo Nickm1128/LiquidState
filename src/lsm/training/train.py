@@ -442,10 +442,26 @@ class LSMTrainer:
         
         # Save training history
         if self.history:
-            history_df = pd.DataFrame(self.history)
-            history_path = os.path.join(save_dir, "training_history.csv")
-            history_df.to_csv(history_path, index=False)
-            print(f"✓ Training history saved to {history_path}")
+            try:
+                # Ensure all arrays have the same length before creating DataFrame
+                max_len = max(len(v) for v in self.history.values() if isinstance(v, list))
+                cleaned_history = {}
+                for key, value in self.history.items():
+                    if isinstance(value, list):
+                        # Pad shorter lists with None or use only the first max_len items
+                        if len(value) < max_len:
+                            cleaned_history[key] = value + [None] * (max_len - len(value))
+                        else:
+                            cleaned_history[key] = value[:max_len]
+                    else:
+                        cleaned_history[key] = value
+                
+                history_df = pd.DataFrame(cleaned_history)
+                history_path = os.path.join(save_dir, "training_history.csv")
+                history_df.to_csv(history_path, index=False)
+                print(f"✓ Training history saved to {history_path}")
+            except Exception as e:
+                print(f"⚠ Warning: Could not save training history: {e}")
         
         # Save training metadata if provided
         if training_results and dataset_info:
@@ -583,9 +599,25 @@ class LSMTrainer:
         if self.cnn_model is not None:
             self.cnn_model.save(os.path.join(save_dir, "cnn_model.keras"))
         
-        # Save training history
-        history_df = pd.DataFrame(self.history)
-        history_df.to_csv(os.path.join(save_dir, "training_history.csv"), index=False)
+        # Save training history  
+        try:
+            # Ensure all arrays have the same length before creating DataFrame
+            if self.history:
+                max_len = max(len(v) for v in self.history.values() if isinstance(v, list))
+                cleaned_history = {}
+                for key, value in self.history.items():
+                    if isinstance(value, list):
+                        if len(value) < max_len:
+                            cleaned_history[key] = value + [None] * (max_len - len(value))
+                        else:
+                            cleaned_history[key] = value[:max_len]
+                    else:
+                        cleaned_history[key] = value
+                
+                history_df = pd.DataFrame(cleaned_history)
+                history_df.to_csv(os.path.join(save_dir, "training_history.csv"), index=False)
+        except Exception as e:
+            print(f"Warning: Could not save training history: {e}")
         
         print(f"Models saved to {save_dir}")
     
