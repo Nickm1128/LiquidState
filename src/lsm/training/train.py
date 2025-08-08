@@ -35,7 +35,7 @@ class LSMTrainer:
     def __init__(self, window_size: int = 10, embedding_dim: int = 128,
                  reservoir_units: List[int] = None, sparsity: float = 0.1,
                  use_multichannel: bool = True, reservoir_type: str = 'standard',
-                 reservoir_config: Dict = None):
+                 reservoir_config: Dict = None, use_attention: bool = True):
         """
         Initialize the LSM trainer.
         
@@ -47,6 +47,7 @@ class LSMTrainer:
             use_multichannel: Whether to use multi-channel rolling wave buffer
             reservoir_type: Type of reservoir ('standard', 'hierarchical', 'attentive', 'echo_state', 'deep')
             reservoir_config: Configuration dictionary for advanced reservoirs
+            use_attention: Whether to use spatial attention in CNN
         """
         self.window_size = window_size
         self.embedding_dim = embedding_dim
@@ -55,6 +56,7 @@ class LSMTrainer:
         self.use_multichannel = use_multichannel
         self.reservoir_type = reservoir_type
         self.reservoir_config = reservoir_config or {}
+        self.use_attention = use_attention
         
         # Models
         self.reservoir = None
@@ -98,7 +100,8 @@ class LSMTrainer:
         self.cnn_model = create_cnn_model(
             window_size=self.window_size,
             embedding_dim=self.embedding_dim,
-            num_channels=num_channels
+            num_channels=num_channels,
+            use_attention=self.use_attention
         )
         self.cnn_model = compile_cnn_model(self.cnn_model)
         
@@ -645,7 +648,8 @@ class LSMTrainer:
 @log_performance("LSM training")
 def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
                 test_size: float = 0.2, embedding_dim: int = 128,
-                reservoir_type: str = 'standard', reservoir_config: Dict = None) -> Dict:
+                reservoir_type: str = 'standard', reservoir_config: Dict = None,
+                use_attention: bool = True) -> Dict:
     """
     Main training function that ties everything together.
     
@@ -657,6 +661,7 @@ def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
         embedding_dim: Token embedding dimension
         reservoir_type: Type of reservoir architecture
         reservoir_config: Configuration for advanced reservoirs
+        use_attention: Whether to use spatial attention in CNN
         
     Returns:
         Training results dictionary
@@ -737,7 +742,8 @@ def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
         sparsity=0.1,
         use_multichannel=True,
         reservoir_type=reservoir_type,
-        reservoir_config=reservoir_config or {}
+        reservoir_config=reservoir_config or {},
+        use_attention=use_attention
     )
     
     # Train the model
