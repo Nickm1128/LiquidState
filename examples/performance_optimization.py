@@ -15,12 +15,37 @@ from typing import List, Dict, Any
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from inference import OptimizedLSMInference
-from lsm_exceptions import ModelLoadError
-from src.lsm.management.model_manager import ModelManager
+# Import from the reorganized package structure
+try:
+    from src.lsm import OptimizedLSMInference, ModelManager
+    from src.lsm.utils.lsm_exceptions import ModelLoadError
+    # Check if OptimizedLSMInference is actually available (not None)
+    if OptimizedLSMInference is None:
+        raise ImportError("OptimizedLSMInference is None")
+except ImportError as e:
+    # Handle TensorFlow import issues gracefully
+    if "tensorflow" in str(e).lower() or "dll" in str(e).lower():
+        print("❌ TensorFlow import error detected.")
+        print("This example requires TensorFlow to be properly installed.")
+        print("Please check your TensorFlow installation and try again.")
+        print("\nFor installation help, see: https://www.tensorflow.org/install")
+        sys.exit(1)
+    
+    # Fallback to direct imports if package structure isn't complete
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from inference import OptimizedLSMInference
+        from src.lsm.utils.lsm_exceptions import ModelLoadError
+        from src.lsm.management.model_manager import ModelManager
+    except ImportError as fallback_error:
+        if "tensorflow" in str(fallback_error).lower() or "dll" in str(fallback_error).lower():
+            print("❌ TensorFlow import error detected.")
+            print("This example requires TensorFlow to be properly installed.")
+            print("Please check your TensorFlow installation and try again.")
+            print("\nFor installation help, see: https://www.tensorflow.org/install")
+            sys.exit(1)
+        else:
+            raise fallback_error
 
 # Optional psutil for memory monitoring
 try:

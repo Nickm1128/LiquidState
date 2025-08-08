@@ -10,12 +10,25 @@ Shows simple prediction, confidence scoring, and top-k predictions.
 import sys
 import os
 
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add src to path for imports
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src'))
 
-from inference import OptimizedLSMInference
-from lsm_exceptions import ModelLoadError, InferenceError
-from src.lsm.management.model_manager import ModelManager
+# Import from the LSM package
+try:
+    from lsm import OptimizedLSMInference, ModelManager
+    from lsm.utils.lsm_exceptions import ModelLoadError, InferenceError
+except ImportError as e:
+    # Handle TensorFlow import issues gracefully
+    if "tensorflow" in str(e).lower() or "dll" in str(e).lower():
+        print("❌ TensorFlow import error detected.")
+        print("This example requires TensorFlow to be properly installed.")
+        print("Please check your TensorFlow installation and try again.")
+        print("\nFor installation help, see: https://www.tensorflow.org/install")
+        sys.exit(1)
+    else:
+        print(f"❌ Import error: {e}")
+        print("Please ensure the LSM package is properly installed.")
+        sys.exit(1)
 
 def find_example_model():
     """Find an available model for demonstration."""

@@ -16,11 +16,11 @@ from sklearn.model_selection import train_test_split
 import pickle
 import json
 
-from lsm_exceptions import (
+from ..utils.lsm_exceptions import (
     DataLoadError, TokenizerError, TokenizerNotFittedError, 
     TokenizerLoadError, TokenizerSaveError, InvalidInputError
 )
-from lsm_logging import get_logger
+from ..utils.lsm_logging import get_logger
 
 logger = get_logger(__name__)
 

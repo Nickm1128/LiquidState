@@ -16,11 +16,11 @@ from datetime import datetime
 
 from ..training.model_config import ModelConfiguration, TrainingMetadata
 from ..data.data_loader import DialogueTokenizer
-from lsm_exceptions import (
+from ..utils.lsm_exceptions import (
     ModelValidationError, ModelLoadError, InvalidInputError,
     handle_file_operation_error
 )
-from lsm_logging import get_logger, log_performance
+from ..utils.lsm_logging import get_logger, log_performance
 
 logger = get_logger(__name__)
 

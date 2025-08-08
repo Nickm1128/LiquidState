@@ -6,8 +6,8 @@ from typing import List, Dict, Optional, Tuple, Union
 import math
 
 from .reservoir import SparseDense, ParametricSineActivation, generate_sparse_mask
-from lsm_exceptions import InvalidInputError, ConfigurationError
-from lsm_logging import get_logger
+from ..utils.lsm_exceptions import InvalidInputError, ConfigurationError
+from ..utils.lsm_logging import get_logger
 
 logger = get_logger(__name__)
 

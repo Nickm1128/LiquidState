@@ -5,7 +5,7 @@ Performance demonstration script showing the optimization improvements.
 
 import time
 import numpy as np
-from data_loader import DialogueTokenizer
+from src.lsm.data.data_loader import DialogueTokenizer
 
 def demonstrate_caching_benefits():
     """Demonstrate the benefits of caching in tokenizer operations."""

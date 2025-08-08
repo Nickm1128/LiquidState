@@ -503,8 +503,8 @@ See the `examples/` directory for complete usage examples:
 
 ## Documentation
 
-- **[API Documentation](API_DOCUMENTATION.md)**: Comprehensive API reference for all classes and methods
-- **[Troubleshooting Guide](TROUBLESHOOTING_GUIDE.md)**: Solutions for common issues and problems
+- **[API Documentation](docs/API_DOCUMENTATION.md)**: Comprehensive API reference for all classes and methods
+- **[Troubleshooting Guide](docs/TROUBLESHOOTING_GUIDE.md)**: Solutions for common issues and problems
 - **[Examples Directory](examples/)**: Complete working examples for different use cases
 
 ## Contributing

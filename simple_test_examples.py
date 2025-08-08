@@ -13,7 +13,7 @@ from typing import List
 # Add current directory to path for imports
 sys.path.append('.')
 
-from inference import LSMInference
+from src.lsm.inference import LSMInference
 from data_loader import load_data
 
 def decode_embedding_to_text(embedding: np.ndarray, tokenizer, top_k: int = 3) -> str:

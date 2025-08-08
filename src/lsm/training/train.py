@@ -13,11 +13,11 @@ from ..core.advanced_reservoir import create_advanced_reservoir
 from ..core.rolling_wave import RollingWaveBuffer, MultiChannelRollingWaveBuffer
 from ..core.cnn_model import create_cnn_model, compile_cnn_model, create_residual_cnn_model
 from .model_config import ModelConfiguration, TrainingMetadata
-from lsm_exceptions import (
+from ..utils.lsm_exceptions import (
     ModelLoadError, ModelSaveError, TrainingSetupError, TrainingExecutionError,
     ConfigurationError, handle_file_operation_error
 )
-from lsm_logging import get_logger, log_performance, create_operation_logger
+from ..utils.lsm_logging import get_logger, log_performance, create_operation_logger
 
 logger = get_logger(__name__)
 
@@ -667,7 +667,7 @@ def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
         Training results dictionary
     """
     # Validate input parameters
-    from input_validation import (
+    from ..utils.input_validation import (
         validate_positive_integer, validate_positive_float, 
         validate_training_parameters, create_helpful_error_message
     )

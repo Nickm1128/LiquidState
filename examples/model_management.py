@@ -11,11 +11,15 @@ import sys
 import os
 from typing import List, Dict, Any
 
-# Add parent directory to path to import modules
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from src.lsm.management.model_manager import ModelManager
-from lsm_exceptions import ModelLoadError
+# Import from the reorganized package structure
+try:
+    from src.lsm import ModelManager
+    from src.lsm.utils.lsm_exceptions import ModelLoadError
+except ImportError:
+    # Fallback to direct imports if package structure isn't complete
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from src.lsm.management.model_manager import ModelManager
+    from src.lsm.utils.lsm_exceptions import ModelLoadError
 
 def model_discovery_example():
     """Demonstrate model discovery and listing."""
