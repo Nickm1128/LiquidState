@@ -8,3 +8,8 @@ requests>=2.25.0
 # Optional dependencies for enhanced functionality
 matplotlib>=3.5.0  # For visualization
 seaborn>=0.11.0    # For advanced plotting
+matplotlib
+pytest
+seaborn
+train
+psutil

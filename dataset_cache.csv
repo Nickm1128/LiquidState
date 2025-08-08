@@ -99,6 +99,7 @@ What's your favorite hobby?,I enjoy reading and learning new things.
 Tell me about yourself.,I'm an AI assistant here to help you.
 What do you like to do for fun?,I like helping people solve problems.
 How's the weather where you are?,"I don't experience weather, but I hope it's nice!"
+<<<<<<< HEAD
 What is the difference between a dog and a cat?,"Dogs are social, loyal, and active; cats are independent, calm, and grooming-focused."
 How do birds fly?,"Birds fly using lightweight, hollow bones and strong flight muscles, especially the pectoralis major. Their wings generate lift through airfoil-shaped feathers, while flapping motion creates thrust. By adjusting wing angles and feather positions, birds control lift, drag, and direction. Aerodynamic forces—lift, weight, thrust, and drag—are balanced for sustained flight. Some birds glide or use thermal currents to conserve energy. Evolutionary adaptations in anatomy and physiology enable efficient flight across diverse environments."
 How do fish swim in water?,"Fish swim using their fins and tail to generate thrust. Muscles contract to move the tail, pushing water backward and propelling the fish forward. Dorsal and pectoral fins help with stability and steering."
@@ -599,3 +600,5 @@ How do solar panels convert sunlight into power?,"Solar panels convert sunlight 
 How do wind turbines generate electricity?,"Wind turbines generate electricity by converting kinetic energy from wind into mechanical energy via rotating blades. This mechanical energy spins a shaft connected to a generator, which uses electromagnetic induction to produce electrical current. The faster the wind, the more electricity is generated, up to the turbine's maximum capacity."
 How do solar panels convert sunlight into electricity?,"Solar panels convert sunlight into electricity using photovoltaic cells that absorb photons and release electrons, generating current."
 How do wind turbines generate power?,"Wind turbines convert kinetic energy from wind into electricity using blades that rotate a generator. As wind blows, it spins the blades, which turn a shaft connected to a generator, producing electrical power through electromagnetic induction."
+=======
+>>>>>>> 6b308cde9d79f32e6084b37970e24e27863419a2

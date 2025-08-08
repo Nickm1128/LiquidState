@@ -47,6 +47,7 @@ def train_command(args) -> Dict[str, Any]:
     print(f"  Test size: {args.test_size}")
     print(f"  Embedding dim: {args.embedding_dim}")
     print(f"  Reservoir type: {args.reservoir_type}")
+    print(f"  Use CNN attention: {args.use_attention}")
     print(f"  Random seed: {args.seed}")
     
     # Set random seed
@@ -70,7 +71,8 @@ def train_command(args) -> Dict[str, Any]:
         test_size=args.test_size,
         embedding_dim=args.embedding_dim,
         reservoir_type=args.reservoir_type,
-        reservoir_config=reservoir_config
+        reservoir_config=reservoir_config,
+        use_attention=args.use_attention
     )
     
     # Save results
@@ -225,6 +227,10 @@ def main():
                              help='Type of reservoir architecture to use')
     train_parser.add_argument('--reservoir-config', type=str, default=None,
                              help='JSON string with reservoir configuration parameters')
+    train_parser.add_argument('--use-attention', action='store_true', default=True,
+                             help='Enable spatial attention in CNN (enabled by default)')
+    train_parser.add_argument('--no-attention', dest='use_attention', action='store_false',
+                             help='Disable spatial attention in CNN')
     
     # Evaluate command
     eval_parser = subparsers.add_parser('evaluate', help='Evaluate trained model')

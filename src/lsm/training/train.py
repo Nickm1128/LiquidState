@@ -35,7 +35,7 @@ class LSMTrainer:
     def __init__(self, window_size: int = 10, embedding_dim: int = 128,
                  reservoir_units: List[int] = None, sparsity: float = 0.1,
                  use_multichannel: bool = True, reservoir_type: str = 'standard',
-                 reservoir_config: Dict = None):
+                 reservoir_config: Dict = None, use_attention: bool = True):
         """
         Initialize the LSM trainer.
         
@@ -47,6 +47,7 @@ class LSMTrainer:
             use_multichannel: Whether to use multi-channel rolling wave buffer
             reservoir_type: Type of reservoir ('standard', 'hierarchical', 'attentive', 'echo_state', 'deep')
             reservoir_config: Configuration dictionary for advanced reservoirs
+            use_attention: Whether to use spatial attention in CNN
         """
         self.window_size = window_size
         self.embedding_dim = embedding_dim
@@ -55,6 +56,7 @@ class LSMTrainer:
         self.use_multichannel = use_multichannel
         self.reservoir_type = reservoir_type
         self.reservoir_config = reservoir_config or {}
+        self.use_attention = use_attention
         
         # Models
         self.reservoir = None
@@ -98,7 +100,8 @@ class LSMTrainer:
         self.cnn_model = create_cnn_model(
             window_size=self.window_size,
             embedding_dim=self.embedding_dim,
-            num_channels=num_channels
+            num_channels=num_channels,
+            use_attention=self.use_attention
         )
         self.cnn_model = compile_cnn_model(self.cnn_model)
         
@@ -408,12 +411,12 @@ class LSMTrainer:
         
         # Save models
         if self.reservoir is not None:
-            reservoir_path = os.path.join(save_dir, "reservoir_model")
+            reservoir_path = os.path.join(save_dir, "reservoir_model.keras")
             self.reservoir.save(reservoir_path)
             print(f"✓ Reservoir model saved to {reservoir_path}")
         
         if self.cnn_model is not None:
-            cnn_path = os.path.join(save_dir, "cnn_model")
+            cnn_path = os.path.join(save_dir, "cnn_model.keras")
             self.cnn_model.save(cnn_path)
             print(f"✓ CNN model saved to {cnn_path}")
         
@@ -442,10 +445,26 @@ class LSMTrainer:
         
         # Save training history
         if self.history:
-            history_df = pd.DataFrame(self.history)
-            history_path = os.path.join(save_dir, "training_history.csv")
-            history_df.to_csv(history_path, index=False)
-            print(f"✓ Training history saved to {history_path}")
+            try:
+                # Ensure all arrays have the same length before creating DataFrame
+                max_len = max(len(v) for v in self.history.values() if isinstance(v, list))
+                cleaned_history = {}
+                for key, value in self.history.items():
+                    if isinstance(value, list):
+                        # Pad shorter lists with None or use only the first max_len items
+                        if len(value) < max_len:
+                            cleaned_history[key] = value + [None] * (max_len - len(value))
+                        else:
+                            cleaned_history[key] = value[:max_len]
+                    else:
+                        cleaned_history[key] = value
+                
+                history_df = pd.DataFrame(cleaned_history)
+                history_path = os.path.join(save_dir, "training_history.csv")
+                history_df.to_csv(history_path, index=False)
+                print(f"✓ Training history saved to {history_path}")
+            except Exception as e:
+                print(f"⚠ Warning: Could not save training history: {e}")
         
         # Save training metadata if provided
         if training_results and dataset_info:
@@ -487,14 +506,14 @@ class LSMTrainer:
             print("⚠ No configuration file found, using current trainer settings")
         
         # Load models
-        reservoir_path = os.path.join(save_dir, "reservoir_model")
+        reservoir_path = os.path.join(save_dir, "reservoir_model.keras")
         if os.path.exists(reservoir_path):
             self.reservoir = keras.models.load_model(reservoir_path)
             print(f"✓ Reservoir model loaded from {reservoir_path}")
         else:
             print("⚠ No reservoir model found")
         
-        cnn_path = os.path.join(save_dir, "cnn_model")
+        cnn_path = os.path.join(save_dir, "cnn_model.keras")
         if os.path.exists(cnn_path):
             self.cnn_model = keras.models.load_model(cnn_path)
             print(f"✓ CNN model loaded from {cnn_path}")
@@ -578,21 +597,37 @@ class LSMTrainer:
         os.makedirs(save_dir, exist_ok=True)
         
         if self.reservoir is not None:
-            self.reservoir.save(os.path.join(save_dir, "reservoir_model"))
+            self.reservoir.save(os.path.join(save_dir, "reservoir_model.keras"))
         
         if self.cnn_model is not None:
-            self.cnn_model.save(os.path.join(save_dir, "cnn_model"))
+            self.cnn_model.save(os.path.join(save_dir, "cnn_model.keras"))
         
-        # Save training history
-        history_df = pd.DataFrame(self.history)
-        history_df.to_csv(os.path.join(save_dir, "training_history.csv"), index=False)
+        # Save training history  
+        try:
+            # Ensure all arrays have the same length before creating DataFrame
+            if self.history:
+                max_len = max(len(v) for v in self.history.values() if isinstance(v, list))
+                cleaned_history = {}
+                for key, value in self.history.items():
+                    if isinstance(value, list):
+                        if len(value) < max_len:
+                            cleaned_history[key] = value + [None] * (max_len - len(value))
+                        else:
+                            cleaned_history[key] = value[:max_len]
+                    else:
+                        cleaned_history[key] = value
+                
+                history_df = pd.DataFrame(cleaned_history)
+                history_df.to_csv(os.path.join(save_dir, "training_history.csv"), index=False)
+        except Exception as e:
+            print(f"Warning: Could not save training history: {e}")
         
         print(f"Models saved to {save_dir}")
     
     def load_models(self, save_dir: str = "saved_models"):
         """Load pre-trained models (legacy method - use load_complete_model for new code)."""
-        reservoir_path = os.path.join(save_dir, "reservoir_model")
-        cnn_path = os.path.join(save_dir, "cnn_model")
+        reservoir_path = os.path.join(save_dir, "reservoir_model.keras")
+        cnn_path = os.path.join(save_dir, "cnn_model.keras")
         
         if os.path.exists(reservoir_path):
             self.reservoir = keras.models.load_model(reservoir_path)
@@ -613,7 +648,8 @@ class LSMTrainer:
 @log_performance("LSM training")
 def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
                 test_size: float = 0.2, embedding_dim: int = 128,
-                reservoir_type: str = 'standard', reservoir_config: Dict = None) -> Dict:
+                reservoir_type: str = 'standard', reservoir_config: Dict = None,
+                use_attention: bool = True) -> Dict:
     """
     Main training function that ties everything together.
     
@@ -625,6 +661,7 @@ def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
         embedding_dim: Token embedding dimension
         reservoir_type: Type of reservoir architecture
         reservoir_config: Configuration for advanced reservoirs
+        use_attention: Whether to use spatial attention in CNN
         
     Returns:
         Training results dictionary
@@ -705,7 +742,8 @@ def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
         sparsity=0.1,
         use_multichannel=True,
         reservoir_type=reservoir_type,
-        reservoir_config=reservoir_config or {}
+        reservoir_config=reservoir_config or {},
+        use_attention=use_attention
     )
     
     # Train the model

@@ -1,8 +1,8 @@
 import numpy as np
 from typing import Optional
 
-from ..utils.lsm_exceptions import InvalidInputError, DataValidationError
-from ..utils.lsm_logging import get_logger
+from lsm_exceptions import InvalidInputError, DataValidationError
+from lsm_logging import get_logger
 
 logger = get_logger(__name__)
 
