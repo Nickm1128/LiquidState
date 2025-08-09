@@ -25,6 +25,7 @@ import os
 from .data import *
 from .management import *
 from .utils import *
+from .pipeline import *
 
 # Training module (handles TensorFlow gracefully)
 from .training import *
@@ -108,6 +109,7 @@ __all__ = [
     *getattr(sys.modules.get(f'{__name__}.training', type('', (), {})()), '__all__', []),
     *getattr(sys.modules.get(f'{__name__}.management', type('', (), {})()), '__all__', []),
     *getattr(sys.modules.get(f'{__name__}.utils', type('', (), {})()), '__all__', []),
+    *getattr(sys.modules.get(f'{__name__}.pipeline', type('', (), {})()), '__all__', []),
 ]
 
 # Add core exports if available

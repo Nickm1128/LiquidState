@@ -70,6 +70,7 @@ htmlcov/
 
 # Jupyter
 .ipynb_checkpoints/
+*.ipynb
 
 # Replit specific
 .replit
@@ -81,3 +82,63 @@ production_validation_*/
 
 # Cache files
 dataset_cache.csv
+
+# HuggingFace cache and datasets
+test_hf_cache/
+hf_cache/
+.cache/
+**/hf_cache/
+**/test_hf_cache/
+
+# Large model files and checkpoints
+*.safetensors
+*.bin
+*.ckpt
+*.pth
+*.pt
+*.model
+*.weights
+best_*.h5
+trained_*.h5
+lsm_*.h5
+checkpoint_*/
+model_checkpoints/
+
+# Training artifacts
+training_history.json
+model_config.json
+*.tensorboard
+runs/
+logs/
+wandb/
+
+# Large data files
+*.arrow
+*.parquet
+*.feather
+*.hdf5
+*.h5py
+*.npy
+*.npz
+
+# Colab specific
+sample_data/
+drive/
+
+# Large text files
+*.txt.gz
+*.jsonl
+*.jsonlines
+large_*.txt
+huge_*.txt
+
+# Backup files
+*.backup
+*.bak
+*_backup.*
+*_old.*
+
+# Temporary training files
+temp_model_*
+tmp_*
+scratch_*

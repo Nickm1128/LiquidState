@@ -303,6 +303,51 @@ class DiskSpaceError(ResourceError):
         self.available_mb = available_mb
 
 
+class DatasetIntegrationError(LSMError):
+    """Base class for dataset integration errors."""
+    pass
+
+
+class HuggingFaceDatasetError(DatasetIntegrationError):
+    """Raised when HuggingFace dataset operations fail."""
+    
+    def __init__(self, dataset_name: str, operation: str, reason: str):
+        details = {"dataset_name": dataset_name, "operation": operation, "reason": reason}
+        message = f"HuggingFace dataset operation '{operation}' failed for '{dataset_name}': {reason}"
+        
+        super().__init__(message, details)
+        self.dataset_name = dataset_name
+        self.operation = operation
+
+
+class ConversationSplitError(DatasetIntegrationError):
+    """Raised when conversation-aware data splitting fails."""
+    
+    def __init__(self, reason: str, total_conversations: Optional[int] = None):
+        details = {"reason": reason}
+        if total_conversations is not None:
+            details["total_conversations"] = total_conversations
+        
+        message = f"Conversation splitting failed: {reason}"
+        if total_conversations is not None:
+            message += f" (total conversations: {total_conversations})"
+        
+        super().__init__(message, details)
+        self.total_conversations = total_conversations
+
+
+class DatasetValidationError(DatasetIntegrationError):
+    """Raised when dataset validation fails."""
+    
+    def __init__(self, dataset_name: str, validation_errors: List[str]):
+        details = {"dataset_name": dataset_name, "validation_errors": validation_errors}
+        message = f"Dataset validation failed for '{dataset_name}': {'; '.join(validation_errors)}"
+        
+        super().__init__(message, details)
+        self.dataset_name = dataset_name
+        self.validation_errors = validation_errors
+
+
 class BackwardCompatibilityError(LSMError):
     """Base class for backward compatibility errors."""
     pass
