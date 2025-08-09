@@ -24,6 +24,10 @@ from ..utils.input_validation import (
 )
 from ..utils.lsm_logging import get_logger
 from .config import ConvenienceConfig, ConvenienceValidationError
+from .performance import (
+    get_global_profiler, get_global_memory_manager, 
+    monitor_performance, manage_memory
+)
 
 logger = get_logger(__name__)
 
@@ -77,6 +81,11 @@ class LSMBase(ABC):
         self._model_components = {}
         self._training_metadata = {}
         
+        # Performance monitoring
+        self._profiler = get_global_profiler()
+        self._memory_manager = get_global_memory_manager()
+        self._performance_metrics = {}
+        
         # Validate parameters on initialization
         self._validate_parameters()
     
@@ -126,6 +135,8 @@ class LSMBase(ABC):
             raise
     
     @abstractmethod
+    @monitor_performance()
+    @manage_memory()
     def fit(self, X, y=None, **fit_params):
         """
         Fit the LSM model to training data.
@@ -147,6 +158,7 @@ class LSMBase(ABC):
         pass
     
     @abstractmethod
+    @monitor_performance()
     def predict(self, X):
         """
         Make predictions using the fitted model.
@@ -778,3 +790,172 @@ class LSMBase(ABC):
         except Exception as e:
             logger.warning(f"Could not calculate model size: {e}")
             return 0.0
+    
+    def optimize_for_memory(self, target_memory_mb: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Optimize model configuration for memory usage.
+        
+        Parameters
+        ----------
+        target_memory_mb : float, optional
+            Target memory usage in MB (defaults to 70% of available)
+            
+        Returns
+        -------
+        optimization_info : dict
+            Information about optimizations applied
+        """
+        optimization_info = {
+            'original_config': self.get_params(),
+            'optimizations_applied': [],
+            'estimated_memory_before': 0.0,
+            'estimated_memory_after': 0.0
+        }
+        
+        try:
+            # Get current memory estimate
+            current_config = self.get_params()
+            optimization_info['estimated_memory_before'] = self._memory_manager.estimate_memory_requirement(
+                data_size=1000,  # Assume 1000 samples for estimation
+                model_config=current_config
+            )
+            
+            # Determine target memory
+            if target_memory_mb is None:
+                from .performance import MemoryMonitor
+                available_mb = MemoryMonitor.get_available_memory_mb()
+                target_memory_mb = available_mb * 0.7
+            
+            # Apply optimizations if current estimate exceeds target
+            if optimization_info['estimated_memory_before'] > target_memory_mb:
+                logger.info(f"Optimizing model for memory: target {target_memory_mb:.1f}MB")
+                
+                # Reduce embedding dimension if too large
+                if self.embedding_dim > 256:
+                    new_embedding_dim = min(256, max(64, int(self.embedding_dim * 0.8)))
+                    self.embedding_dim = new_embedding_dim
+                    optimization_info['optimizations_applied'].append(f"reduced_embedding_dim_to_{new_embedding_dim}")
+                
+                # Reduce window size if too large
+                if self.window_size > 20:
+                    new_window_size = min(20, max(5, int(self.window_size * 0.8)))
+                    self.window_size = new_window_size
+                    optimization_info['optimizations_applied'].append(f"reduced_window_size_to_{new_window_size}")
+                
+                # Optimize reservoir configuration
+                if isinstance(self.reservoir_config, dict):
+                    if 'reservoir_units' in self.reservoir_config:
+                        units = self.reservoir_config['reservoir_units']
+                        if isinstance(units, list) and sum(units) > 200:
+                            # Reduce reservoir units
+                            new_units = [max(50, int(u * 0.7)) for u in units]
+                            self.reservoir_config['reservoir_units'] = new_units
+                            optimization_info['optimizations_applied'].append(f"reduced_reservoir_units_to_{new_units}")
+                
+                # Re-validate parameters after optimization
+                self._validate_parameters()
+                
+                # Calculate new memory estimate
+                optimized_config = self.get_params()
+                optimization_info['estimated_memory_after'] = self._memory_manager.estimate_memory_requirement(
+                    data_size=1000,
+                    model_config=optimized_config
+                )
+                
+                memory_saved = optimization_info['estimated_memory_before'] - optimization_info['estimated_memory_after']
+                optimization_info['memory_saved_mb'] = memory_saved
+                
+                logger.info(f"Memory optimization saved {memory_saved:.1f}MB")
+            else:
+                optimization_info['estimated_memory_after'] = optimization_info['estimated_memory_before']
+                logger.debug("No memory optimization needed")
+            
+            optimization_info['optimized_config'] = self.get_params()
+            
+        except Exception as e:
+            logger.error(f"Memory optimization failed: {e}")
+            optimization_info['error'] = str(e)
+        
+        return optimization_info
+    
+    def get_performance_metrics(self) -> Dict[str, Any]:
+        """
+        Get performance metrics for this model instance.
+        
+        Returns
+        -------
+        metrics : dict
+            Performance metrics and statistics
+        """
+        metrics = {
+            'model_info': {
+                'class': self.__class__.__name__,
+                'is_fitted': self._is_fitted,
+                'parameters': self.get_params(),
+                'estimated_size_mb': self._calculate_model_size()
+            },
+            'training_metadata': self._training_metadata,
+            'performance_metrics': self._performance_metrics
+        }
+        
+        # Add profiler metrics if available
+        if hasattr(self, '_profiler') and self._profiler:
+            metrics['profiler_summary'] = self._profiler.get_metrics_summary()
+        
+        return metrics
+    
+    def clear_performance_cache(self):
+        """Clear cached performance data to free memory."""
+        if hasattr(self, '_profiler') and self._profiler:
+            self._profiler.metrics_history.clear()
+        
+        self._performance_metrics.clear()
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        logger.debug("Performance cache cleared")
+    
+    def enable_performance_monitoring(self, enable: bool = True):
+        """
+        Enable or disable performance monitoring.
+        
+        Parameters
+        ----------
+        enable : bool, default=True
+            Whether to enable performance monitoring
+        """
+        if enable:
+            if not hasattr(self, '_profiler') or self._profiler is None:
+                self._profiler = get_global_profiler()
+            if not hasattr(self, '_memory_manager') or self._memory_manager is None:
+                self._memory_manager = get_global_memory_manager()
+            logger.info("Performance monitoring enabled")
+        else:
+            self._profiler = None
+            self._memory_manager = None
+            logger.info("Performance monitoring disabled")
+    
+    def export_performance_report(self, filepath: Union[str, Path]) -> None:
+        """
+        Export performance metrics to a file.
+        
+        Parameters
+        ----------
+        filepath : str or Path
+            Path to export the performance report
+        """
+        filepath = Path(filepath)
+        
+        report_data = {
+            'export_timestamp': datetime.datetime.now().isoformat(),
+            'model_class': self.__class__.__name__,
+            'model_id': id(self),
+            'performance_metrics': self.get_performance_metrics()
+        }
+        
+        with open(filepath, 'w') as f:
+            json.dump(report_data, f, indent=2, default=str)
+        
+        logger.info(f"Performance report exported to {filepath}")

@@ -32,6 +32,31 @@ from .utils import (
     preprocess_conversation_data
 )
 
+# Performance monitoring and optimization
+try:
+    from .performance import (
+        PerformanceProfiler, MemoryMonitor, AutoMemoryManager,
+        BenchmarkSuite, get_global_profiler, get_global_memory_manager,
+        monitor_performance, manage_memory
+    )
+    from .benchmarks import (
+        ConvenienceAPIBenchmark, run_quick_benchmark, run_full_benchmark
+    )
+    _PERFORMANCE_AVAILABLE = True
+except ImportError as e:
+    PerformanceProfiler = None
+    MemoryMonitor = None
+    AutoMemoryManager = None
+    BenchmarkSuite = None
+    ConvenienceAPIBenchmark = None
+    get_global_profiler = None
+    get_global_memory_manager = None
+    monitor_performance = None
+    manage_memory = None
+    run_quick_benchmark = None
+    run_full_benchmark = None
+    _PERFORMANCE_AVAILABLE = False
+
 # Import convenience classes with error handling
 try:
     from .generator import LSMGenerator
@@ -46,6 +71,21 @@ try:
 except ImportError as e:
     LSMClassifier = None
     _CLASSIFIER_AVAILABLE = False
+
+try:
+    from .regressor import LSMRegressor
+    _REGRESSOR_AVAILABLE = True
+except ImportError as e:
+    LSMRegressor = None
+    _REGRESSOR_AVAILABLE = False
+
+# CLI functionality (optional import)
+try:
+    from . import cli
+    _CLI_AVAILABLE = True
+except ImportError as e:
+    cli = None
+    _CLI_AVAILABLE = False
 
 __all__ = [
     'LSMBase',
@@ -69,11 +109,33 @@ __all__ = [
     'preprocess_conversation_data'
 ]
 
+# Add performance monitoring components to __all__ if available
+if _PERFORMANCE_AVAILABLE:
+    __all__.extend([
+        'PerformanceProfiler',
+        'MemoryMonitor', 
+        'AutoMemoryManager',
+        'BenchmarkSuite',
+        'ConvenienceAPIBenchmark',
+        'get_global_profiler',
+        'get_global_memory_manager',
+        'monitor_performance',
+        'manage_memory',
+        'run_quick_benchmark',
+        'run_full_benchmark'
+    ])
+
 # Add available classes to __all__
 if _GENERATOR_AVAILABLE:
     __all__.append('LSMGenerator')
 
 if _CLASSIFIER_AVAILABLE:
     __all__.append('LSMClassifier')
+
+if _REGRESSOR_AVAILABLE:
+    __all__.append('LSMRegressor')
+
+if _CLI_AVAILABLE:
+    __all__.append('cli')
 
 __version__ = '1.0.0'

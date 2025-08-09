@@ -66,7 +66,68 @@ pip install psutil matplotlib seaborn pytest
 
 ## Quick Start Guide
 
-### Training a New Model
+### 🚀 Convenience API (Recommended for New Users)
+
+The LSM project now includes a **scikit-learn-compatible convenience API** that makes it easy to get started without dealing with the complexity of the underlying architecture.
+
+#### Simple Text Generation
+```python
+from lsm import LSMGenerator
+
+# Create and train a generator with intelligent defaults
+generator = LSMGenerator(preset='fast')  # or 'balanced', 'quality'
+generator.fit(conversations)
+
+# Generate responses
+response = generator.generate("Hello, how are you?")
+print(response)
+
+# Interactive chat
+generator.chat()  # Start interactive session
+```
+
+#### Classification Tasks
+```python
+from lsm import LSMClassifier
+
+# Train a classifier
+classifier = LSMClassifier(preset='balanced')
+classifier.fit(texts, labels)
+
+# Make predictions
+predictions = classifier.predict(new_texts)
+probabilities = classifier.predict_proba(new_texts)
+```
+
+#### Command Line Interface
+```bash
+# Train a text generator
+python lsm_cli.py train-generator --data-path conversations.txt --preset balanced
+
+# Generate responses
+python lsm_cli.py generate --model-path ./model --prompt "Hello there!" --interactive
+
+# Train a classifier
+python lsm_cli.py train-classifier --data-path data.csv --preset quality
+```
+
+#### Examples and Demos
+```bash
+# See prediction examples
+python examples/convenience_prediction_demo.py --preset fast
+
+# Performance benchmarking
+python examples/convenience_performance_demo.py
+
+# Dialogue processing demonstration
+python examples/convenience_dialogue_examples.py
+```
+
+> **New to LSM?** Start with the [Getting Started Tutorial](docs/GETTING_STARTED_TUTORIAL.md) for a comprehensive introduction.
+> 
+> **Migration Note**: If you're upgrading from the legacy interface, see [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for help updating your code.
+
+### Advanced Training (Direct API)
 
 #### Basic Training
 ```bash
@@ -904,6 +965,14 @@ python examples/huggingface_dataset_demo.py --dataset cosmopedia-v2
 ```
 
 ## Documentation
+
+### Convenience API Documentation (New Users Start Here)
+
+- **[Getting Started Tutorial](docs/GETTING_STARTED_TUTORIAL.md)**: Step-by-step tutorial for new users
+- **[Convenience API Documentation](docs/CONVENIENCE_API_DOCUMENTATION.md)**: Complete reference for the simplified API
+- **[Advanced Convenience Tutorial](docs/ADVANCED_CONVENIENCE_API_TUTORIAL.md)**: Advanced patterns and production usage
+- **[Convenience API Troubleshooting](docs/CONVENIENCE_API_TROUBLESHOOTING.md)**: Solutions for convenience API issues
+- **[Migration Guide](MIGRATION_GUIDE.md)**: Migrate from legacy code to convenience API
 
 ### Comprehensive Documentation Suite
 

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .base import LSMBase
 from .config import ConvenienceConfig, ConvenienceValidationError
+from .performance import monitor_performance, manage_memory
 from ..utils.lsm_exceptions import (
     LSMError, TrainingSetupError, TrainingExecutionError, 
     InvalidInputError, ModelLoadError
@@ -266,6 +267,8 @@ class LSMGenerator(LSMBase):
         
         return cls(**config, **gen_params)
     
+    @monitor_performance("lsm_generator_fit")
+    @manage_memory(memory_threshold=0.8)
     def fit(self, 
             X: Union[List[str], List[Dict[str, Any]], str],
             y: Optional[Any] = None,
@@ -274,6 +277,7 @@ class LSMGenerator(LSMBase):
             epochs: int = 50,
             batch_size: int = 32,
             verbose: bool = True,
+            auto_optimize_memory: bool = True,
             **fit_params) -> 'LSMGenerator':
         """
         Train the LSM model on conversation data.
@@ -316,6 +320,17 @@ class LSMGenerator(LSMBase):
         """
         try:
             logger.info("Starting LSM text generation training...")
+            
+            # Auto-optimize memory if requested
+            if auto_optimize_memory and hasattr(self, '_memory_manager'):
+                data_size = len(X) if isinstance(X, list) else 1
+                optimized_batch_size = self._memory_manager.optimize_batch_size(
+                    data_size=data_size,
+                    model_config=self.get_params()
+                )
+                if optimized_batch_size != batch_size:
+                    logger.info(f"Auto-optimized batch size: {batch_size} -> {optimized_batch_size}")
+                    batch_size = optimized_batch_size
             
             # Validate and preprocess input data
             processed_data = self._preprocess_training_data(X, system_messages)
@@ -406,6 +421,7 @@ class LSMGenerator(LSMBase):
                     reason=f"LSM training failed: {e}"
                 )
     
+    @monitor_performance("lsm_generator_generate")
     def generate(self,
                  prompt: Union[str, List[str]],
                  system_message: Optional[str] = None,
@@ -516,13 +532,16 @@ class LSMGenerator(LSMBase):
                     f"generation failed: {e}"
                 )
     
+    @monitor_performance("lsm_generator_batch_generate")
+    @manage_memory(memory_threshold=0.85)
     def batch_generate(self,
                       prompts: List[str],
                       system_messages: Optional[List[str]] = None,
                       max_length: Optional[int] = None,
                       temperature: Optional[float] = None,
                       return_confidence: bool = False,
-                      batch_size: int = 8) -> List[Union[str, Tuple[str, float]]]:
+                      batch_size: int = 8,
+                      auto_optimize_batch: bool = True) -> List[Union[str, Tuple[str, float]]]:
         """
         Generate responses for multiple prompts efficiently.
         
@@ -560,6 +579,16 @@ class LSMGenerator(LSMBase):
                 )
         else:
             system_messages = [None] * len(prompts)
+        
+        # Auto-optimize batch size if requested
+        if auto_optimize_batch and hasattr(self, '_memory_manager'):
+            optimized_batch_size = self._memory_manager.optimize_batch_size(
+                data_size=len(prompts),
+                model_config=self.get_params()
+            )
+            if optimized_batch_size != batch_size:
+                logger.info(f"Auto-optimized batch size for generation: {batch_size} -> {optimized_batch_size}")
+                batch_size = optimized_batch_size
         
         # Process in batches
         responses = []
