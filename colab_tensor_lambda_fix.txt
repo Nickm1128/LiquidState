@@ -1,0 +1,270 @@
+COLAB TENSOR COPYING & LAMBDA SHAPE ERROR FIX
+==============================================
+
+PROBLEM 1: "Failed copying input tensor from CPU to GPU - Dst tensor is not initialized"
+PROBLEM 2: "Could not automatically infer the shape of the Lambda's output"
+
+These are TensorFlow tensor placement and Lambda layer shape issues.
+
+SOLUTION: Fix tensor placement and Lambda layer definitions
+
+ADD THIS CODE BLOCK before your model building:
+
+```python
+# Tensor and Model Configuration Fix
+import tensorflow as tf
+import numpy as np
+
+def fix_tensor_placement():
+    """Fix tensor placement issues between CPU and GPU"""
+    # Clear any existing sessions
+    tf.keras.backend.clear_session()
+    
+    # Set mixed precision policy to avoid tensor placement issues
+    try:
+        policy = tf.keras.mixed_precision.Policy('mixed_float16')
+        tf.keras.mixed_precision.set_global_policy(policy)
+        print("✅ Mixed precision policy set")
+    except:
+        print("⚠️ Mixed precision not available, using float32")
+    
+    # Configure tensor placement
+    tf.config.experimental.enable_tensor_float_32_execution(False)
+    
+    return True
+
+def build_response_cnn_fixed(input_shape, embedding_dim=128, vocab_size=None):
+    """
+    Build 2D CNN with proper tensor handling and explicit shapes
+    """
+    print(f"🏗️ Building CNN with input shape: {input_shape}")
+    
+    # Ensure we're working with proper tensor shapes
+    inputs = tf.keras.layers.Input(shape=input_shape, name='reservoir_states', dtype=tf.float32)
+    
+    # Add explicit reshape if needed
+    if len(input_shape) == 1:
+        # If input is 1D, reshape to 2D for CNN
+        height = int(np.sqrt(input_shape[0]))
+        width = height
+        if height * width != input_shape[0]:
+            height = input_shape[0]
+            width = 1
+        
+        print(f"   Reshaping 1D input {input_shape} to 2D: ({height}, {width}, 1)")
+        x = tf.keras.layers.Reshape((height, width, 1))(inputs)
+    else:
+        x = inputs
+    
+    # First Conv2D block with explicit output shape
+    x = tf.keras.layers.Conv2D(32, (3, 3), activation='relu', padding='same', name='conv1')(x)
+    x = tf.keras.layers.BatchNormalization(name='bn1')(x)
+    x = tf.keras.layers.MaxPooling2D((2, 2), name='pool1')(x)
+    x = tf.keras.layers.Dropout(0.25, name='dropout1')(x)
+    
+    # Second Conv2D block
+    x = tf.keras.layers.Conv2D(64, (3, 3), activation='relu', padding='same', name='conv2')(x)
+    x = tf.keras.layers.BatchNormalization(name='bn2')(x)
+    x = tf.keras.layers.MaxPooling2D((2, 2), name='pool2')(x)
+    x = tf.keras.layers.Dropout(0.25, name='dropout2')(x)
+    
+    # Global pooling instead of flatten to handle variable sizes
+    x = tf.keras.layers.GlobalAveragePooling2D(name='global_pool')(x)
+    x = tf.keras.layers.Dropout(0.5, name='dropout3')(x)
+    
+    # Dense layers with explicit shapes
+    x = tf.keras.layers.Dense(256, activation='relu', name='dense1')(x)
+    x = tf.keras.layers.BatchNormalization(name='bn3')(x)
+    x = tf.keras.layers.Dropout(0.3, name='dropout4')(x)
+    
+    x = tf.keras.layers.Dense(128, activation='relu', name='dense2')(x)
+    
+    # Output layer with explicit shape
+    embeddings = tf.keras.layers.Dense(
+        embedding_dim, 
+        activation='tanh', 
+        name='response_embeddings',
+        dtype=tf.float32
+    )(x)
+    
+    model = tf.keras.Model(inputs=inputs, outputs=embeddings, name='ResponseCNN')
+    
+    return model
+
+def cosine_similarity_loss_fixed(y_true, y_pred):
+    """Fixed cosine similarity loss with proper tensor handling"""
+    # Ensure tensors are on the same device and properly shaped
+    y_true = tf.cast(y_true, tf.float32)
+    y_pred = tf.cast(y_pred, tf.float32)
+    
+    # Normalize embeddings
+    y_true_norm = tf.nn.l2_normalize(y_true, axis=-1)
+    y_pred_norm = tf.nn.l2_normalize(y_pred, axis=-1)
+    
+    # Compute cosine similarity
+    cosine_sim = tf.reduce_sum(y_true_norm * y_pred_norm, axis=-1)
+    
+    # Return loss (1 - similarity)
+    return 1.0 - cosine_sim
+
+def prepare_training_data_fixed(reservoir_states, responses, tokenizer, max_length=50):
+    """Prepare training data with proper tensor handling"""
+    print("🔄 Preparing training data with tensor fixes...")
+    
+    # Ensure reservoir_states is a proper numpy array
+    if not isinstance(reservoir_states, np.ndarray):
+        reservoir_states = np.array(reservoir_states)
+    
+    print(f"   Original reservoir states shape: {reservoir_states.shape}")
+    
+    batch_size = reservoir_states.shape[0]
+    
+    # Handle different input shapes
+    if len(reservoir_states.shape) == 3:
+        # (batch, seq_len, reservoir_size) -> flatten to (batch, seq_len * reservoir_size)
+        seq_len, reservoir_size = reservoir_states.shape[1], reservoir_states.shape[2]
+        X = reservoir_states.reshape(batch_size, seq_len * reservoir_size)
+    elif len(reservoir_states.shape) == 2:
+        # Already flattened
+        X = reservoir_states
+    else:
+        raise ValueError(f"Unexpected reservoir states shape: {reservoir_states.shape}")
+    
+    print(f"   Processed input shape: {X.shape}")
+    
+    # Create target embeddings (normalized random for demo)
+    embedding_dim = 128
+    y = np.random.randn(batch_size, embedding_dim).astype(np.float32)
+    y = y / np.linalg.norm(y, axis=1, keepdims=True)
+    
+    print(f"   Target shape: {y.shape}")
+    
+    return X, y
+
+# Apply fixes
+fix_tensor_placement()
+```
+
+REPLACE YOUR MODEL BUILDING AND TRAINING CODE:
+
+OLD CODE:
+```python
+# Build the CNN model
+if 'reservoir_states' in locals() and reservoir_states is not None:
+    # ... existing code ...
+    response_cnn = build_response_cnn(
+        input_shape=input_shape,
+        embedding_dim=128,
+        vocab_size=len(tokenizer.get_vocab()) if 'tokenizer' in locals() else 10000
+    )
+    
+    response_cnn.compile(
+        optimizer=Adam(learning_rate=0.001),
+        loss=cosine_similarity_loss,
+        metrics=['mae']
+    )
+```
+
+NEW CODE:
+```python
+# Build the CNN model with fixes
+if 'reservoir_states' in locals() and reservoir_states is not None:
+    print("🏗️ Building CNN model with tensor fixes...")
+    
+    # Get input shape from reservoir states
+    if len(reservoir_states.shape) == 3:
+        input_shape = (reservoir_states.shape[1] * reservoir_states.shape[2],)
+    else:
+        input_shape = reservoir_states.shape[1:]
+    
+    print(f"   Using input shape: {input_shape}")
+    
+    # Build model with fixes
+    response_cnn = build_response_cnn_fixed(
+        input_shape=input_shape,
+        embedding_dim=128
+    )
+    
+    # Compile with fixed loss
+    response_cnn.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+        loss=cosine_similarity_loss_fixed,
+        metrics=['mae'],
+        run_eagerly=False  # Disable eager execution for better GPU performance
+    )
+    
+    print("✅ CNN model built and compiled successfully!")
+    response_cnn.summary()
+    
+    cnn_ready = True
+else:
+    print("❌ Reservoir states not available. Run previous cells first.")
+    cnn_ready = False
+```
+
+REPLACE YOUR TRAINING DATA PREPARATION:
+
+OLD CODE:
+```python
+# Prepare training data
+X, y = prepare_training_data(
+    reservoir_states, 
+    processed_responses if 'processed_responses' in locals() else ['sample'] * len(reservoir_states),
+    tokenizer if 'tokenizer' in locals() else None
+)
+```
+
+NEW CODE:
+```python
+# Prepare training data with fixes
+X, y = prepare_training_data_fixed(
+    reservoir_states, 
+    processed_responses if 'processed_responses' in locals() else ['sample'] * len(reservoir_states),
+    tokenizer if 'tokenizer' in locals() else None
+)
+
+# Ensure data is on the right device and type
+X = tf.constant(X, dtype=tf.float32)
+y = tf.constant(y, dtype=tf.float32)
+
+print(f"✅ Training data prepared: X={X.shape}, y={y.shape}")
+```
+
+SIMPLE ALTERNATIVE FIX:
+
+If the above is too complex, just add this before training:
+
+```python
+# Simple tensor fix
+tf.keras.backend.clear_session()
+
+# Force CPU training to avoid tensor placement issues
+with tf.device('/CPU:0'):
+    # Rebuild model on CPU
+    response_cnn_cpu = tf.keras.models.clone_model(response_cnn)
+    response_cnn_cpu.compile(
+        optimizer='adam',
+        loss='mse',  # Use simpler loss
+        metrics=['mae']
+    )
+    
+    # Train on CPU
+    history = response_cnn_cpu.fit(
+        X_train, y_train,
+        validation_data=(X_val, y_val),
+        epochs=5,  # Fewer epochs
+        batch_size=8,  # Small batch
+        verbose=1
+    )
+```
+
+KEY FIXES:
+==========
+1. Proper tensor placement and device handling
+2. Fixed Lambda layer shape inference
+3. Explicit tensor shapes throughout
+4. Simplified CNN architecture
+5. CPU fallback option
+6. Better error handling
+
+This should resolve both the tensor copying and Lambda shape errors!

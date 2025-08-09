@@ -30,6 +30,25 @@ from .pipeline import *
 # Training module (handles TensorFlow gracefully)
 from .training import *
 
+# Convenience API (handles TensorFlow gracefully)
+try:
+    from .convenience import *
+    _CONVENIENCE_AVAILABLE = True
+except ImportError as e:
+    _CONVENIENCE_AVAILABLE = False
+    # Create placeholder for LSMGenerator if not available
+    class _ConveniencePlaceholder:
+        """Placeholder class for when convenience API cannot be imported."""
+        def __init__(self, *args, **kwargs):
+            raise ImportError(
+                "Convenience API is not available. This may be due to missing TensorFlow "
+                "or other dependencies. Please ensure all required dependencies are installed."
+            )
+    
+    LSMGenerator = _ConveniencePlaceholder
+    LSMClassifier = _ConveniencePlaceholder
+    LSMRegressor = _ConveniencePlaceholder
+
 # Core module (requires TensorFlow)
 try:
     from .core import *
@@ -115,6 +134,13 @@ __all__ = [
 # Add core exports if available
 if _CORE_AVAILABLE:
     __all__.extend(getattr(sys.modules.get(f'{__name__}.core', type('', (), {})()), '__all__', []))
+
+# Add convenience API exports if available
+if _CONVENIENCE_AVAILABLE:
+    __all__.extend(getattr(sys.modules.get(f'{__name__}.convenience', type('', (), {})()), '__all__', []))
+else:
+    # Always include convenience class names for backward compatibility
+    __all__.extend(['LSMGenerator', 'LSMClassifier', 'LSMRegressor'])
 
 # Add inference exports (always include for backward compatibility)
 try:
