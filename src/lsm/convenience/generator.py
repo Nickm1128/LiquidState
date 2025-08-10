@@ -476,9 +476,12 @@ class LSMGenerator(LSMBase):
             if verbose:
                 logger.info("Preparing training data...")
             
-            X_train, y_train, X_test, y_test = self._prepare_training_data(
-                processed_data, validation_split
-            )
+            prep_result = self._prepare_training_data(processed_data, validation_split)
+            if len(prep_result) == 4:
+                X_train, y_train, X_test, y_test = prep_result
+            else:
+                X_train, y_train = prep_result
+                X_test = y_test = None
             
             # Train the model
             if verbose:
@@ -616,26 +619,24 @@ class LSMGenerator(LSMBase):
                 )
             
             # Generate response using the response generator
-            if self._response_generator is None:
-                raise InvalidInputError(
-                    "model state",
-                    "initialized response generator",
-                    "uninitialized generator (training may have failed)"
-                )
-            
+            response_gen = self._get_response_generator()
+
             # Prepare input for generation
             generation_input = self._prepare_generation_input(prompt_text, system_message)
-            
+
             # Generate response
-            result = self._response_generator.generate_complete_response(
+            result = response_gen.generate_response(
                 input_sequence=generation_input,
                 system_context=self._create_system_context(system_message) if system_message else None,
                 return_intermediate=return_confidence
             )
-            
+
             # Extract response and confidence
-            response = result.response_text if hasattr(result, 'response_text') else str(result)
-            confidence = result.confidence if hasattr(result, 'confidence') else 1.0
+            if isinstance(result, tuple):
+                response, confidence = result
+            else:
+                response = result.response_text if hasattr(result, 'response_text') else str(result)
+                confidence = getattr(result, 'confidence', 1.0)
             
             # Apply temperature if different from training
             if gen_temperature != self.temperature:
@@ -1087,6 +1088,16 @@ class LSMGenerator(LSMBase):
         # Process system message into the format expected by the response generator
         # This is a placeholder - actual implementation would depend on SystemMessageProcessor interface
         return {"system_message": system_message}
+
+    def _get_response_generator(self):
+        """Retrieve the response generator, raising a helpful error if missing."""
+        if self._response_generator is None:
+            raise InvalidInputError(
+                "model state",
+                "initialized response generator",
+                "uninitialized generator (training may have failed)"
+            )
+        return self._response_generator
     
     def _initialize_enhanced_tokenization_system(self) -> None:
         """Initialize the enhanced tokenization system for the trainer."""
@@ -1397,6 +1408,12 @@ class LSMGenerator(LSMBase):
         finally:
             # Restore original streaming setting
             self.streaming = original_streaming
+
+    def set_memory_threshold(self, threshold: float) -> None:
+        """Set memory threshold for automatic memory management."""
+        self.memory_threshold = threshold
+        if hasattr(self, '_memory_manager') and self._memory_manager is not None:
+            self._memory_manager.memory_threshold = threshold
     
     def __sklearn_tags__(self):
         """Return sklearn tags for this estimator."""

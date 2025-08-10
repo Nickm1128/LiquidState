@@ -470,15 +470,11 @@ class LSMBase(ABC):
         
         Raises
         ------
-        InvalidInputError
+        RuntimeError
             If the model is not fitted
         """
         if not self._is_fitted:
-            raise InvalidInputError(
-                "model state",
-                "fitted model",
-                "unfitted model (call fit() first)"
-            )
+            raise RuntimeError("Model must be fitted before use")
     
     def _estimate_memory_usage(self, data_size: int) -> float:
         """

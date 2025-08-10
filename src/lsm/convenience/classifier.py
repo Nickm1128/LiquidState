@@ -435,7 +435,7 @@ class LSMClassifier(LSMBase, ClassifierMixin):
                 logger.info("Starting LSM classification training...")
             
             # Validate and preprocess input data
-            X_processed, y_processed = self._preprocess_classification_data(X, y)
+            X_processed, y_processed = self._prepare_classification_data(X, y)
             
             # Store feature information for sklearn compatibility
             self.feature_names_in_ = [f'text_sample_{i}' for i in range(len(X_processed))]
@@ -452,26 +452,29 @@ class LSMClassifier(LSMBase, ClassifierMixin):
             if self.n_classes is None:
                 self.n_classes = self.n_classes_
             
-            # Initialize enhanced tokenizer
+            # Initialize enhanced tokenizer (best effort)
             if verbose:
                 logger.info("Initializing enhanced tokenizer...")
-            
-            self._enhanced_tokenizer = self._create_enhanced_tokenizer()
+            try:
+                self._enhanced_tokenizer = self._create_enhanced_tokenizer()
+            except Exception as tok_err:
+                logger.warning(f"Failed to create enhanced tokenizer: {tok_err}")
+                self._enhanced_tokenizer = None
             
             # Extract features using enhanced tokenizer or TF-IDF fallback
             if verbose:
                 logger.info("Extracting text features...")
             
             X_features = self._extract_features(X_processed)
-            
+
             # Train downstream classifier
             if verbose:
                 logger.info(f"Training {self.classifier_type} classifier...")
-            
+
             start_time = time.time()
-            
+
             self._downstream_classifier = self._create_downstream_classifier()
-            self._downstream_classifier.fit(X_features, y_encoded)
+            self._fit_classifier(X_features, y_encoded)
             
             classifier_training_time = time.time() - start_time
             
@@ -525,15 +528,12 @@ class LSMClassifier(LSMBase, ClassifierMixin):
             
             # Extract features
             X_features = self._extract_features(X_processed)
-            
+
             # Make predictions using downstream classifier
-            y_pred_encoded = self._downstream_classifier.predict(X_features)
-            
-            # Decode predictions back to original labels
-            y_pred = self._label_encoder.inverse_transform(y_pred_encoded)
-            
+            y_pred = self._predict_classes(X_features)
+
             logger.debug(f"Made predictions for {len(X_processed)} samples")
-            
+
             return y_pred
             
         except Exception as e:
@@ -574,12 +574,12 @@ class LSMClassifier(LSMBase, ClassifierMixin):
             
             # Extract features
             X_features = self._extract_features(X_processed)
-            
+
             # Get probability predictions
-            probabilities = self._downstream_classifier.predict_proba(X_features)
-            
+            probabilities = self._predict_probabilities(X_features)
+
             logger.debug(f"Generated probabilities for {len(X_processed)} samples")
-            
+
             return probabilities
             
         except Exception as e:
@@ -702,7 +702,29 @@ class LSMClassifier(LSMBase, ClassifierMixin):
                 f"Invalid input type: {type(X).__name__}",
                 suggestion="Use string, list of strings, or numpy array"
             )
-    
+
+    # ------------------------------------------------------------------
+    # Internal helper methods for patching in tests
+
+    def _prepare_classification_data(self, X, y) -> Tuple[List[str], List]:
+        """Alias for preprocessing training data to support test patching."""
+        return self._preprocess_classification_data(X, y)
+
+    def _fit_classifier(self, X_features: np.ndarray, y_encoded: np.ndarray) -> None:
+        """Train the downstream classifier (separated for easier mocking)."""
+        self._downstream_classifier.fit(X_features, y_encoded)
+
+    def _predict_classes(self, X_features: np.ndarray) -> np.ndarray:
+        """Predict encoded classes and decode them to original labels."""
+        y_pred_encoded = self._downstream_classifier.predict(X_features)
+        return self._label_encoder.inverse_transform(y_pred_encoded)
+
+    def _predict_probabilities(self, X_features: np.ndarray) -> np.ndarray:
+        """Predict class probabilities using the downstream classifier."""
+        return self._downstream_classifier.predict_proba(X_features)
+
+    # ------------------------------------------------------------------
+
     def _extract_features(self, X: List[str]) -> np.ndarray:
         """Extract text features using enhanced tokenizer or TF-IDF fallback."""
         try:
