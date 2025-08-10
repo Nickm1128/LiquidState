@@ -194,6 +194,8 @@ class CNNArchitectureFactory:
                 x = self._add_attention_block(x, attention_type)
             
             # Convolutional blocks
+            current_height, current_width = input_shape[0], input_shape[1]
+            
             for i, (num_filters, kernel_size, dropout_rate) in enumerate(
                 zip(filters, kernel_sizes, dropout_rates)
             ):
@@ -208,7 +210,12 @@ class CNNArchitectureFactory:
                 if use_batch_norm:
                     x = layers.BatchNormalization(name=f'bn2d_{i+1}')(x)
                 
-                x = layers.MaxPool2D(pool_size=2, name=f'pool2d_{i+1}')(x)
+                # Only apply pooling if dimensions are large enough
+                if current_height >= 4 and current_width >= 4:
+                    x = layers.MaxPool2D(pool_size=2, name=f'pool2d_{i+1}')(x)
+                    current_height = current_height // 2
+                    current_width = current_width // 2
+                
                 x = layers.Dropout(dropout_rate, name=f'dropout2d_{i+1}')(x)
             
             # Global pooling and dense layers

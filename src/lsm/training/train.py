@@ -552,6 +552,11 @@ class LSMTrainer:
             X_waveforms: 2D waveforms for CNN input
             y: Target embeddings (unchanged)
         """
+        # Ensure models are built before processing
+        if self.reservoir is None:
+            print("Building models before creating training data...")
+            self.build_models()
+        
         print(f"Converting {len(X)} sequences to waveforms...")
         
         num_samples = len(X)
@@ -936,7 +941,7 @@ class LSMTrainer:
             
         except Exception as e:
             logger.error(f"Response-level training failed: {e}")
-            raise TrainingExecutionError(f"Response-level training failed: {str(e)}")
+            raise TrainingExecutionError(None, f"Response-level training failed: {str(e)}")
     
     def _train_enhanced_cnn_models(self,
                                  X_train: np.ndarray,
@@ -1081,7 +1086,7 @@ class LSMTrainer:
             
         except Exception as e:
             logger.error(f"Enhanced CNN training failed: {e}")
-            raise TrainingExecutionError(f"Enhanced CNN training failed: {str(e)}")
+            raise TrainingExecutionError(None, f"Enhanced CNN training failed: {str(e)}")
     
     def _embedding_to_response_text(self, embedding: np.ndarray) -> str:
         """
@@ -1210,16 +1215,14 @@ class LSMTrainer:
         # Use provided tokenizer or self.tokenizer
         tokenizer_to_save = tokenizer if tokenizer is not None else self.tokenizer
         
-        # Save models
+        # Save models using custom persistence to avoid Keras serialization issues
         if self.reservoir is not None:
-            reservoir_path = os.path.join(save_dir, "reservoir_model.keras")
-            self.reservoir.save(reservoir_path)
-            print(f"✓ Reservoir model saved to {reservoir_path}")
+            reservoir_path = os.path.join(save_dir, "reservoir_model")
+            self._save_model_safely(self.reservoir, reservoir_path, "Reservoir")
         
         if self.cnn_model is not None:
-            cnn_path = os.path.join(save_dir, "cnn_model.keras")
-            self.cnn_model.save(cnn_path)
-            print(f"✓ CNN model saved to {cnn_path}")
+            cnn_path = os.path.join(save_dir, "cnn_model")
+            self._save_model_safely(self.cnn_model, cnn_path, "CNN")
         
         # Save tokenizer (new system)
         if tokenizer_to_save is not None:
@@ -1227,19 +1230,19 @@ class LSMTrainer:
             
             if isinstance(tokenizer_to_save, StandardTokenizerWrapper):
                 tokenizer_to_save.save(tokenizer_path)
-                print(f"✓ StandardTokenizerWrapper saved to {tokenizer_path}")
+                print(f"[SUCCESS] StandardTokenizerWrapper saved to {tokenizer_path}")
             elif hasattr(tokenizer_to_save, 'is_fitted') and tokenizer_to_save.is_fitted:
                 # Legacy DialogueTokenizer
                 tokenizer_to_save.save(tokenizer_path)
-                print(f"✓ DialogueTokenizer saved to {tokenizer_path}")
+                print(f"[SUCCESS] DialogueTokenizer saved to {tokenizer_path}")
             else:
-                print("⚠ Warning: Tokenizer not fitted or unsupported type")
+                print("[WARNING] Tokenizer not fitted or unsupported type")
         
         # Save sinusoidal embedder
         if self.embedder is not None and hasattr(self.embedder, '_is_fitted') and self.embedder._is_fitted:
             embedder_path = os.path.join(save_dir, "sinusoidal_embedder")
             self.embedder.save(embedder_path)
-            print(f"✓ SinusoidalEmbedder saved to {embedder_path}")
+            print(f"[SUCCESS] SinusoidalEmbedder saved to {embedder_path}")
         
         # Create and save enhanced configuration
         config = ModelConfiguration(
@@ -1268,7 +1271,7 @@ class LSMTrainer:
         with open(config_path, 'w') as f:
             import json
             json.dump(config_dict, f, indent=2)
-        print(f"✓ Enhanced configuration saved to {config_path}")
+        print(f"[SUCCESS] Enhanced configuration saved to {config_path}")
         
         # Save training history
         if self.history:
@@ -1289,18 +1292,18 @@ class LSMTrainer:
                 history_df = pd.DataFrame(cleaned_history)
                 history_path = os.path.join(save_dir, "training_history.csv")
                 history_df.to_csv(history_path, index=False)
-                print(f"✓ Training history saved to {history_path}")
+                print(f"[SUCCESS] Training history saved to {history_path}")
             except Exception as e:
-                print(f"⚠ Warning: Could not save training history: {e}")
+                print(f"[WARNING] Could not save training history: {e}")
         
         # Save training metadata if provided
         if training_results and dataset_info:
             metadata = TrainingMetadata.create_from_training(training_results, dataset_info)
             metadata_path = os.path.join(save_dir, "metadata.json")
             metadata.save(metadata_path)
-            print(f"✓ Training metadata saved to {metadata_path}")
+            print(f"[SUCCESS] Training metadata saved to {metadata_path}")
         
-        print(f"🎉 Complete model saved to {save_dir}")
+        print(f"[SUCCESS] Complete model saved to {save_dir}")
     
     def load_complete_model(self, save_dir: str) -> Tuple['LSMTrainer', Any]:
         """
@@ -1322,7 +1325,7 @@ class LSMTrainer:
                 import json
                 config_dict = json.load(f)
             
-            print(f"✓ Enhanced configuration loaded from {config_path}")
+            print(f"[SUCCESS] Enhanced configuration loaded from {config_path}")
             
             # Update trainer parameters from config
             self.window_size = config_dict.get('window_size', self.window_size)
@@ -1341,24 +1344,22 @@ class LSMTrainer:
             tokenizer_type = config_dict.get('tokenizer_type')
             has_sinusoidal_embedder = config_dict.get('has_sinusoidal_embedder', False)
         else:
-            print("⚠ No configuration file found, using current trainer settings")
+            print("[WARNING] No configuration file found, using current trainer settings")
             tokenizer_type = None
             has_sinusoidal_embedder = False
         
-        # Load models
-        reservoir_path = os.path.join(save_dir, "reservoir_model.keras")
-        if os.path.exists(reservoir_path):
-            self.reservoir = keras.models.load_model(reservoir_path)
-            print(f"✓ Reservoir model loaded from {reservoir_path}")
+        # Load models using custom persistence
+        reservoir_path = os.path.join(save_dir, "reservoir_model")
+        if os.path.exists(reservoir_path + "_weights.h5"):
+            self.reservoir = self._load_model_safely(reservoir_path, "Reservoir")
         else:
-            print("⚠ No reservoir model found")
+            print("[WARNING] No reservoir model found")
         
-        cnn_path = os.path.join(save_dir, "cnn_model.keras")
-        if os.path.exists(cnn_path):
-            self.cnn_model = keras.models.load_model(cnn_path)
-            print(f"✓ CNN model loaded from {cnn_path}")
+        cnn_path = os.path.join(save_dir, "cnn_model")
+        if os.path.exists(cnn_path + "_weights.h5"):
+            self.cnn_model = self._load_model_safely(cnn_path, "CNN")
         else:
-            print("⚠ No CNN model found")
+            print("[WARNING] No CNN model found")
         
         # Load tokenizer (enhanced system)
         tokenizer_path = os.path.join(save_dir, "tokenizer")
@@ -1369,9 +1370,9 @@ class LSMTrainer:
                 try:
                     tokenizer = StandardTokenizerWrapper.load(tokenizer_path)
                     self.tokenizer = tokenizer
-                    print(f"✓ StandardTokenizerWrapper loaded from {tokenizer_path}")
+                    print(f"[SUCCESS] StandardTokenizerWrapper loaded from {tokenizer_path}")
                 except Exception as e:
-                    print(f"⚠ Failed to load StandardTokenizerWrapper: {e}")
+                    print(f"[WARNING] Failed to load StandardTokenizerWrapper: {e}")
             
             if tokenizer is None:
                 # Try loading as legacy DialogueTokenizer
@@ -1379,20 +1380,20 @@ class LSMTrainer:
                     tokenizer = DialogueTokenizer(embedding_dim=self.embedding_dim)
                     tokenizer.load(tokenizer_path)
                     self.tokenizer = tokenizer
-                    print(f"✓ DialogueTokenizer loaded from {tokenizer_path}")
+                    print(f"[SUCCESS] DialogueTokenizer loaded from {tokenizer_path}")
                 except Exception as e:
-                    print(f"⚠ Failed to load DialogueTokenizer: {e}")
+                    print(f"[WARNING] Failed to load DialogueTokenizer: {e}")
         else:
-            print("⚠ No tokenizer found - you'll need to fit it on your data")
+            print("[WARNING] No tokenizer found - you'll need to fit it on your data")
         
         # Load sinusoidal embedder if available
         embedder_path = os.path.join(save_dir, "sinusoidal_embedder")
         if has_sinusoidal_embedder and os.path.exists(embedder_path):
             try:
                 self.embedder = SinusoidalEmbedder.load(embedder_path)
-                print(f"✓ SinusoidalEmbedder loaded from {embedder_path}")
+                print(f"[SUCCESS] SinusoidalEmbedder loaded from {embedder_path}")
             except Exception as e:
-                print(f"⚠ Failed to load SinusoidalEmbedder: {e}")
+                print(f"[WARNING] Failed to load SinusoidalEmbedder: {e}")
                 self.embedder = None
         
         # Initialize dataset components if using HuggingFace data
@@ -1406,7 +1407,7 @@ class LSMTrainer:
             for col in history_df.columns:
                 if col in self.history:
                     self.history[col] = history_df[col].tolist()
-            print(f"✓ Training history loaded from {history_path}")
+            print(f"[SUCCESS] Training history loaded from {history_path}")
         
         return self, tokenizer
     
@@ -1461,6 +1462,10 @@ class LSMTrainer:
         
         return info
     
+    def save_model(self, save_dir: str = "saved_models"):
+        """Save trained models (convenience API compatibility)."""
+        return self.save_models(save_dir)
+    
     def save_models(self, save_dir: str = "saved_models"):
         """Save trained models (legacy method - use save_complete_model for new code)."""
         os.makedirs(save_dir, exist_ok=True)
@@ -1492,6 +1497,105 @@ class LSMTrainer:
             print(f"Warning: Could not save training history: {e}")
         
         print(f"Models saved to {save_dir}")
+    
+    def _save_model_safely(self, model, base_path: str, model_name: str):
+        """
+        Save model using custom persistence to avoid Keras serialization issues.
+        
+        Args:
+            model: Keras model to save
+            base_path: Base path for saving (without extension)
+            model_name: Name of the model for logging
+        """
+        try:
+            import json
+            import numpy as np
+            
+            # Save model weights
+            weights_path = base_path + "_weights.h5"
+            model.save_weights(weights_path)
+            
+            # Save model architecture as JSON
+            architecture_path = base_path + "_architecture.json"
+            with open(architecture_path, 'w') as f:
+                f.write(model.to_json())
+            
+            # Save model configuration
+            config_path = base_path + "_config.json"
+            model_config = {
+                'input_shape': model.input_shape if hasattr(model, 'input_shape') else None,
+                'output_shape': model.output_shape if hasattr(model, 'output_shape') else None,
+                'name': model.name if hasattr(model, 'name') else model_name.lower(),
+                'trainable_params': model.count_params() if hasattr(model, 'count_params') else 0
+            }
+            
+            with open(config_path, 'w') as f:
+                json.dump(model_config, f, indent=2, default=str)
+            
+            print(f"[SUCCESS] {model_name} model saved safely to {base_path}")
+            
+        except Exception as e:
+            print(f"[WARNING] Failed to save {model_name} model safely: {e}")
+            # Fallback to standard Keras save
+            try:
+                fallback_path = base_path + ".keras"
+                model.save(fallback_path)
+                print(f"[SUCCESS] {model_name} model saved with fallback method to {fallback_path}")
+            except Exception as e2:
+                print(f"[ERROR] Both safe and fallback save methods failed for {model_name}: {e2}")
+    
+    def _load_model_safely(self, base_path: str, model_name: str):
+        """
+        Load model using custom persistence.
+        
+        Args:
+            base_path: Base path for loading (without extension)
+            model_name: Name of the model for logging
+            
+        Returns:
+            Loaded Keras model or None if loading fails
+        """
+        try:
+            import json
+            from keras.models import model_from_json
+            
+            # Load model architecture
+            architecture_path = base_path + "_architecture.json"
+            if not os.path.exists(architecture_path):
+                raise FileNotFoundError(f"Architecture file not found: {architecture_path}")
+            
+            with open(architecture_path, 'r') as f:
+                model_json = f.read()
+            
+            # Recreate model from architecture
+            model = model_from_json(model_json)
+            
+            # Load weights
+            weights_path = base_path + "_weights.h5"
+            if not os.path.exists(weights_path):
+                raise FileNotFoundError(f"Weights file not found: {weights_path}")
+            
+            model.load_weights(weights_path)
+            
+            print(f"[SUCCESS] {model_name} model loaded safely from {base_path}")
+            return model
+            
+        except Exception as e:
+            print(f"[WARNING] Failed to load {model_name} model safely: {e}")
+            # Fallback to standard Keras load
+            try:
+                fallback_path = base_path + ".keras"
+                if os.path.exists(fallback_path):
+                    from keras.models import load_model
+                    model = load_model(fallback_path)
+                    print(f"[SUCCESS] {model_name} model loaded with fallback method from {fallback_path}")
+                    return model
+                else:
+                    print(f"[ERROR] No fallback file found for {model_name}")
+                    return None
+            except Exception as e2:
+                print(f"[ERROR] Both safe and fallback load methods failed for {model_name}: {e2}")
+                return None
     
     def load_models(self, save_dir: str = "saved_models"):
         """Load pre-trained models (legacy method - use load_complete_model for new code)."""
@@ -1796,7 +1900,7 @@ class LSMTrainer:
             
         except Exception as e:
             logger.error(f"Enhanced CNN training failed: {e}")
-            raise TrainingExecutionError(f"Enhanced CNN training failed: {str(e)}")
+            raise TrainingExecutionError(None, f"Enhanced CNN training failed: {str(e)}")
     
     def train_response_level(self,
                            X_train: Optional[np.ndarray] = None,
@@ -1911,7 +2015,7 @@ class LSMTrainer:
             
         except Exception as e:
             logger.error(f"Response-level training failed: {e}")
-            raise TrainingExecutionError(f"Response-level training failed: {str(e)}")
+            raise TrainingExecutionError(None, f"Response-level training failed: {str(e)}")
     
     def _embedding_to_response_text(self, embedding: np.ndarray) -> str:
         """
@@ -2150,7 +2254,7 @@ def run_training(window_size: int = 10, batch_size: int = 32, epochs: int = 20,
             ]
         )
         print(error_msg)
-        raise TrainingExecutionError(f"Training failed: {e}")
+        raise TrainingExecutionError(None, f"Training failed: {e}")
     
     # Save models with complete state
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

@@ -217,6 +217,34 @@ class CosineSimilarityLoss:
                 "margin_cosine_similarity",
                 f"Failed to compute margin cosine similarity loss: {str(e)}"
             )
+    
+    def get_config(self) -> Dict[str, Any]:
+        """
+        Get configuration for serialization.
+        
+        Returns:
+            Dictionary containing the configuration parameters
+        """
+        return {
+            'temperature': self.temperature,
+            'margin': self.margin,
+            'weight_factor': self.weight_factor,
+            'epsilon': self.epsilon,
+            'reduction': self.reduction
+        }
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]) -> 'CosineSimilarityLoss':
+        """
+        Create instance from configuration.
+        
+        Args:
+            config: Configuration dictionary
+            
+        Returns:
+            CosineSimilarityLoss instance
+        """
+        return cls(**config)
 
 
 class ResponseLevelCosineLoss:
@@ -328,6 +356,34 @@ class ResponseLevelCosineLoss:
         avg_distance = tf.reduce_mean(distances)
         
         return avg_distance
+    
+    def get_config(self) -> Dict[str, Any]:
+        """
+        Get configuration for serialization.
+        
+        Returns:
+            Dictionary containing the configuration parameters
+        """
+        return {
+            'sequence_weight': self.sequence_weight,
+            'coherence_weight': self.coherence_weight,
+            'diversity_weight': self.diversity_weight,
+            'temperature': self.temperature,
+            'epsilon': self.epsilon
+        }
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]) -> 'ResponseLevelCosineLoss':
+        """
+        Create instance from configuration.
+        
+        Args:
+            config: Configuration dictionary
+            
+        Returns:
+            ResponseLevelCosineLoss instance
+        """
+        return cls(**config)
 
 
 class CNNLossCalculator:

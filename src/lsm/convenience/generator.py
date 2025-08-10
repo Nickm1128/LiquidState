@@ -449,6 +449,22 @@ class LSMGenerator(LSMBase):
             self.feature_names_in_ = list(processed_data.keys()) if isinstance(processed_data, dict) else ['conversations']
             self.n_features_in_ = len(self.feature_names_in_)
             
+            # Set random seed if provided (before creating trainer)
+            if self.random_state is not None:
+                import random
+                import numpy as np
+                import os
+                random.seed(self.random_state)
+                np.random.seed(self.random_state)
+                os.environ['PYTHONHASHSEED'] = str(self.random_state)
+                
+                # Set TensorFlow seed if available
+                try:
+                    import tensorflow as tf
+                    tf.random.set_seed(self.random_state)
+                except ImportError:
+                    pass
+            
             # Initialize trainer with configuration
             trainer_config = self._create_trainer_config(epochs, batch_size, validation_split)
             self._trainer = LSMTrainer(**trainer_config)
@@ -962,9 +978,8 @@ class LSMGenerator(LSMBase):
         config['sparsity'] = self.reservoir_config.get('sparsity', 0.1)
         config['use_attention'] = self.reservoir_type in ['attentive', 'hierarchical']
         
-        # Set random seed if provided
-        if self.random_state is not None:
-            config['random_state'] = self.random_state
+        # Note: random_state is handled separately in fit() method
+        # LSMTrainer doesn't accept random_state parameter directly
         
         return config
     
@@ -1005,6 +1020,23 @@ class LSMGenerator(LSMBase):
                 self._response_generator = self._trainer.response_generator
             else:
                 # Create response generator from trainer components
+                # Ensure embedder is available
+                if self._trainer.embedder is None:
+                    logger.warning("Trainer embedder is None, creating fallback embedder")
+                    # Create a fallback embedder
+                    if hasattr(self._trainer, 'tokenizer') and self._trainer.tokenizer:
+                        try:
+                            from ..data.tokenization import SinusoidalEmbedder
+                            vocab_size = getattr(self._trainer.tokenizer, 'get_vocab_size', lambda: 50257)()
+                            self._trainer.embedder = SinusoidalEmbedder(
+                                vocab_size=vocab_size,
+                                embedding_dim=self.embedding_dim
+                            )
+                            logger.info(f"Created fallback SinusoidalEmbedder with vocab_size={vocab_size}")
+                        except Exception as e:
+                            logger.error(f"Failed to create fallback embedder: {e}")
+                            raise ValueError("No embedder available for response generation")
+                
                 self._response_generator = ResponseGenerator(
                     tokenizer=self._trainer.tokenizer,
                     embedder=self._trainer.embedder,
@@ -1084,6 +1116,12 @@ class LSMGenerator(LSMBase):
                                 **self.sinusoidal_config
                             )
                         self._trainer.embedder = embedder
+                        logger.info(f"Created and set embedder: {type(embedder).__name__}")
+                    else:
+                        # For standard embedding type, create a basic embedder
+                        embedder = enhanced_tokenizer.create_sinusoidal_embedder()
+                        self._trainer.embedder = embedder
+                        logger.info(f"Created standard embedder: {type(embedder).__name__}")
                 
                 logger.info("Enhanced tokenization system initialized successfully")
             else:
@@ -1239,6 +1277,37 @@ class LSMGenerator(LSMBase):
                 'backend': enhanced_tokenizer.get_adapter().config.backend,
                 'embedding_shape': enhanced_tokenizer.get_token_embeddings_shape()
             })
+        
+        return info
+    
+    def get_model_info(self) -> Dict[str, Any]:
+        """
+        Get comprehensive model information.
+        
+        Returns
+        -------
+        info : dict
+            Dictionary containing model architecture and configuration information
+        """
+        info = {
+            'model_type': 'LSMGenerator',
+            'reservoir_type': self.reservoir_type,
+            'embedding_dim': self.embedding_dim,
+            'window_size': self.window_size,
+            'embedding_type': self.embedding_type,
+            'system_message_support': self.system_message_support,
+            'response_level': self.response_level,
+            'is_fitted': self._is_fitted,
+            'tokenizer_info': self.get_tokenizer_info()
+        }
+        
+        # Add trainer information if available
+        if hasattr(self, '_trainer') and self._trainer is not None:
+            info['trainer_available'] = True
+            info['reservoir_config'] = self.reservoir_config
+            info['sinusoidal_config'] = self.sinusoidal_config
+        else:
+            info['trainer_available'] = False
         
         return info
     

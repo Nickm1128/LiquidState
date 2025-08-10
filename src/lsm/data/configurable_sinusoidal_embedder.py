@@ -895,6 +895,63 @@ class ConfigurableSinusoidalEmbedder(keras.layers.Layer):
         
         return results
     
+    def embed(self, token_ids: Union[List[int], np.ndarray, tf.Tensor]) -> np.ndarray:
+        """
+        Convenience method for embedding token IDs (compatibility with ResponseGenerator).
+        
+        This method provides a simple interface for embedding token IDs, compatible
+        with the ResponseGenerator's expectations. It wraps the call() method with
+        appropriate input handling and output conversion.
+        
+        Args:
+            token_ids: Token IDs to embed. Can be:
+                - List of integers
+                - NumPy array of shape (sequence_length,) or (batch_size, sequence_length)
+                - TensorFlow tensor
+        
+        Returns:
+            np.ndarray: Embedded tokens as NumPy array of shape 
+                (sequence_length, embedding_dim) or (batch_size, sequence_length, embedding_dim)
+        
+        Example:
+            >>> embedder = ConfigurableSinusoidalEmbedder(config)
+            >>> token_ids = [1, 2, 3, 4, 5]
+            >>> embeddings = embedder.embed(token_ids)
+            >>> print(embeddings.shape)  # (5, embedding_dim)
+        """
+        try:
+            # Convert input to tensor
+            if isinstance(token_ids, list):
+                token_ids = tf.constant(token_ids, dtype=tf.int32)
+            elif isinstance(token_ids, np.ndarray):
+                token_ids = tf.constant(token_ids, dtype=tf.int32)
+            elif not isinstance(token_ids, tf.Tensor):
+                token_ids = tf.constant(token_ids, dtype=tf.int32)
+            
+            # Ensure we have the right shape
+            if len(token_ids.shape) == 1:
+                # Add batch dimension
+                token_ids = tf.expand_dims(token_ids, axis=0)
+                squeeze_output = True
+            else:
+                squeeze_output = False
+            
+            # Call the main embedding method
+            embeddings = self.call(token_ids, training=False)
+            
+            # Convert to numpy
+            embeddings_np = embeddings.numpy()
+            
+            # Remove batch dimension if we added it
+            if squeeze_output:
+                embeddings_np = embeddings_np[0]
+            
+            return embeddings_np
+            
+        except Exception as e:
+            logger.error(f"Failed to embed token IDs: {e}")
+            raise ValueError(f"Embedding failed: {e}")
+    
     def enable_gpu_profiling(self, logdir: str = "./logs/sinusoidal_embedder_profile"):
         """
         Enable GPU profiling for performance analysis.
