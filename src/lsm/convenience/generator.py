@@ -34,11 +34,12 @@ ResponseGenerator = None
 SystemMessageProcessor = None
 StandardTokenizerWrapper = None
 SinusoidalEmbedder = None
+EnhancedTokenizerWrapper = None
 
 def _check_training_components():
     """Lazy import of training components to avoid circular imports."""
     global _TRAINING_AVAILABLE, LSMTrainer, ResponseGenerator, SystemMessageProcessor
-    global StandardTokenizerWrapper, SinusoidalEmbedder
+    global StandardTokenizerWrapper, SinusoidalEmbedder, EnhancedTokenizerWrapper
     
     if _TRAINING_AVAILABLE is not None:
         return _TRAINING_AVAILABLE
@@ -49,6 +50,7 @@ def _check_training_components():
         from ..core.system_message_processor import SystemMessageProcessor as _SystemMessageProcessor
         from ..data.tokenization import StandardTokenizerWrapper as _StandardTokenizerWrapper
         from ..data.tokenization import SinusoidalEmbedder as _SinusoidalEmbedder
+        from ..data.enhanced_tokenization import EnhancedTokenizerWrapper as _EnhancedTokenizerWrapper
         
         # Assign to module-level variables
         LSMTrainer = _LSMTrainer
@@ -56,6 +58,7 @@ def _check_training_components():
         SystemMessageProcessor = _SystemMessageProcessor
         StandardTokenizerWrapper = _StandardTokenizerWrapper
         SinusoidalEmbedder = _SinusoidalEmbedder
+        EnhancedTokenizerWrapper = _EnhancedTokenizerWrapper
         
         _TRAINING_AVAILABLE = True
         logger.info("Training components loaded successfully")
@@ -91,10 +94,23 @@ class LSMGenerator(LSMBase):
         Whether to use response-level training and generation
     tokenizer : str, default='gpt2'
         Name of the tokenizer to use ('gpt2', 'bert-base-uncased', etc.)
+        Can be any supported tokenizer backend (HuggingFace, OpenAI, spaCy, custom)
     max_length : int, default=512
         Maximum sequence length for tokenization
     temperature : float, default=1.0
         Default temperature for text generation
+    embedding_type : str, default='standard'
+        Type of embedding to use ('standard', 'sinusoidal', 'configurable_sinusoidal')
+    sinusoidal_config : dict, optional
+        Configuration for sinusoidal embeddings when embedding_type is 'sinusoidal' or 'configurable_sinusoidal'
+    streaming : bool, default=False
+        Whether to enable streaming data processing for large datasets
+    streaming_config : dict, optional
+        Configuration for streaming data processing
+    tokenizer_backend_config : dict, optional
+        Backend-specific configuration for the tokenizer
+    enable_caching : bool, default=True
+        Whether to enable intelligent caching for tokenization
     random_state : int, optional
         Random seed for reproducibility
     **kwargs : dict
@@ -121,6 +137,30 @@ class LSMGenerator(LSMBase):
     >>> generator.fit(conversations)
     >>> response = generator.generate("Hello, how are you?")
     >>> 
+    >>> # With enhanced sinusoidal embeddings
+    >>> generator = LSMGenerator(
+    ...     tokenizer='gpt2',
+    ...     embedding_type='configurable_sinusoidal',
+    ...     sinusoidal_config={'learnable_frequencies': True, 'base_frequency': 10000.0}
+    ... )
+    >>> generator.fit(conversations)
+    >>> response = generator.generate("Hello, how are you?")
+    >>> 
+    >>> # With streaming for large datasets
+    >>> generator = LSMGenerator(
+    ...     streaming=True,
+    ...     streaming_config={'batch_size': 1000, 'memory_threshold_mb': 1000.0}
+    ... )
+    >>> generator.fit_streaming("path/to/large/dataset.txt")
+    >>> 
+    >>> # With different tokenizer backends
+    >>> generator = LSMGenerator(
+    ...     tokenizer='bert-base-uncased',  # HuggingFace tokenizer
+    ...     embedding_type='sinusoidal',
+    ...     enable_caching=True
+    ... )
+    >>> generator.fit(conversations)
+    >>> 
     >>> # With system messages
     >>> generator = LSMGenerator(system_message_support=True)
     >>> conversations = [
@@ -145,6 +185,12 @@ class LSMGenerator(LSMBase):
                  tokenizer: str = 'gpt2',
                  max_length: int = 512,
                  temperature: float = 1.0,
+                 embedding_type: str = 'standard',
+                 sinusoidal_config: Optional[Dict[str, Any]] = None,
+                 streaming: bool = False,
+                 streaming_config: Optional[Dict[str, Any]] = None,
+                 tokenizer_backend_config: Optional[Dict[str, Any]] = None,
+                 enable_caching: bool = True,
                  random_state: Optional[int] = None,
                  **kwargs):
         
@@ -174,6 +220,14 @@ class LSMGenerator(LSMBase):
         self.max_length = max_length
         self.temperature = temperature
         
+        # Enhanced tokenizer parameters
+        self.embedding_type = embedding_type
+        self.sinusoidal_config = sinusoidal_config or {}
+        self.streaming = streaming
+        self.streaming_config = streaming_config or {}
+        self.tokenizer_backend_config = tokenizer_backend_config or {}
+        self.enable_caching = enable_caching
+        
         # Initialize base class
         super().__init__(
             window_size=window_size,
@@ -187,6 +241,17 @@ class LSMGenerator(LSMBase):
         # Generation components (initialized during fit)
         self._response_generator = None
         self._system_processor = None
+        
+        # Store enhanced tokenizer configuration
+        self._enhanced_tokenizer_config = {
+            'embedding_type': self.embedding_type,
+            'sinusoidal_config': self.sinusoidal_config.copy(),
+            'streaming': self.streaming,
+            'streaming_config': self.streaming_config.copy(),
+            'tokenizer_backend_config': self.tokenizer_backend_config.copy(),
+            'enable_caching': self.enable_caching,
+            'max_length': self.max_length
+        }
         
         # sklearn-compatible attributes
         self.classes_ = None  # Not applicable for generation
@@ -219,12 +284,55 @@ class LSMGenerator(LSMBase):
                     suggestion="Use True for response-level training (recommended), False for token-level"
                 )
             
-            # Validate tokenizer name
-            valid_tokenizers = ['gpt2', 'bert-base-uncased', 'distilbert-base-uncased', 'roberta-base']
-            if self.tokenizer_name not in valid_tokenizers:
-                logger.warning(
-                    f"Tokenizer '{self.tokenizer_name}' not in recommended list. "
-                    f"Recommended: {valid_tokenizers}"
+            # Validate tokenizer name (more flexible for enhanced tokenizer)
+            if not isinstance(self.tokenizer_name, str):
+                raise ConvenienceValidationError(
+                    f"tokenizer must be a string, got {type(self.tokenizer_name).__name__}",
+                    suggestion="Use a tokenizer name like 'gpt2', 'bert-base-uncased', or any supported backend"
+                )
+            
+            # Validate embedding type
+            valid_embedding_types = ['standard', 'sinusoidal', 'configurable_sinusoidal']
+            if self.embedding_type not in valid_embedding_types:
+                raise ConvenienceValidationError(
+                    f"Invalid embedding_type: {self.embedding_type}",
+                    suggestion="Use 'standard' for basic embeddings, 'sinusoidal' for sinusoidal embeddings, or 'configurable_sinusoidal' for advanced sinusoidal embeddings",
+                    valid_options=valid_embedding_types
+                )
+            
+            # Validate sinusoidal config
+            if not isinstance(self.sinusoidal_config, dict):
+                raise ConvenienceValidationError(
+                    f"sinusoidal_config must be a dictionary, got {type(self.sinusoidal_config).__name__}",
+                    suggestion="Pass sinusoidal configuration as a dictionary: {'learnable_frequencies': True, 'base_frequency': 10000.0}"
+                )
+            
+            # Validate streaming config
+            if not isinstance(self.streaming_config, dict):
+                raise ConvenienceValidationError(
+                    f"streaming_config must be a dictionary, got {type(self.streaming_config).__name__}",
+                    suggestion="Pass streaming configuration as a dictionary: {'batch_size': 1000, 'memory_threshold_mb': 1000.0}"
+                )
+            
+            # Validate tokenizer backend config
+            if not isinstance(self.tokenizer_backend_config, dict):
+                raise ConvenienceValidationError(
+                    f"tokenizer_backend_config must be a dictionary, got {type(self.tokenizer_backend_config).__name__}",
+                    suggestion="Pass backend configuration as a dictionary: {'trust_remote_code': True, 'use_fast': True}"
+                )
+            
+            # Validate streaming flag
+            if not isinstance(self.streaming, bool):
+                raise ConvenienceValidationError(
+                    f"streaming must be boolean, got {type(self.streaming).__name__}",
+                    suggestion="Use True to enable streaming for large datasets, False to disable"
+                )
+            
+            # Validate caching flag
+            if not isinstance(self.enable_caching, bool):
+                raise ConvenienceValidationError(
+                    f"enable_caching must be boolean, got {type(self.enable_caching).__name__}",
+                    suggestion="Use True to enable intelligent caching (recommended), False to disable"
                 )
         
         except Exception as e:
@@ -261,7 +369,9 @@ class LSMGenerator(LSMBase):
         
         # Extract generation-specific parameters
         gen_params = {}
-        for param in ['system_message_support', 'response_level', 'temperature']:
+        for param in ['system_message_support', 'response_level', 'temperature', 
+                     'embedding_type', 'sinusoidal_config', 'streaming', 
+                     'streaming_config', 'tokenizer_backend_config', 'enable_caching']:
             if param in config:
                 gen_params[param] = config.pop(param)
         
@@ -343,8 +453,8 @@ class LSMGenerator(LSMBase):
             trainer_config = self._create_trainer_config(epochs, batch_size, validation_split)
             self._trainer = LSMTrainer(**trainer_config)
             
-            # Initialize tokenization system
-            self._trainer.initialize_tokenization_system(max_length=self.max_length)
+            # Initialize enhanced tokenization system
+            self._initialize_enhanced_tokenization_system()
             
             # Prepare training data
             if verbose:
@@ -360,27 +470,35 @@ class LSMGenerator(LSMBase):
             
             start_time = time.time()
             
-            # Use response-level training if enabled
-            if self.response_level:
-                history = self._trainer.train_response_level(
-                    X_train=X_train,
-                    y_train=y_train,
-                    X_test=X_test,
-                    y_test=y_test,
-                    epochs=epochs,
-                    batch_size=batch_size,
-                    **fit_params
+            # Check if we should use streaming training
+            if self.streaming and hasattr(self._trainer, 'train_streaming'):
+                logger.info("Using streaming training for large dataset...")
+                history = self._train_with_streaming(
+                    X_train, y_train, X_test, y_test, 
+                    epochs, batch_size, verbose, **fit_params
                 )
             else:
-                history = self._trainer.train(
-                    X_train=X_train,
-                    y_train=y_train,
-                    X_test=X_test,
-                    y_test=y_test,
-                    epochs=epochs,
-                    batch_size=batch_size,
-                    **fit_params
-                )
+                # Use standard training
+                if self.response_level:
+                    history = self._trainer.train_response_level(
+                        X_train=X_train,
+                        y_train=y_train,
+                        X_test=X_test,
+                        y_test=y_test,
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        **fit_params
+                    )
+                else:
+                    history = self._trainer.train(
+                        X_train=X_train,
+                        y_train=y_train,
+                        X_test=X_test,
+                        y_test=y_test,
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        **fit_params
+                    )
             
             training_time = time.time() - start_time
             
@@ -826,6 +944,17 @@ class LSMGenerator(LSMBase):
             'use_huggingface_data': False,  # We're providing our own data
         }
         
+        # Update enhanced tokenizer configuration (already stored in __init__)
+        self._enhanced_tokenizer_config.update({
+            'embedding_type': self.embedding_type,
+            'sinusoidal_config': self.sinusoidal_config.copy(),
+            'streaming': self.streaming,
+            'streaming_config': self.streaming_config.copy(),
+            'tokenizer_backend_config': self.tokenizer_backend_config.copy(),
+            'enable_caching': self.enable_caching,
+            'max_length': self.max_length
+        })
+        
         # Add reservoir-specific configuration
         if self.reservoir_type == 'standard':
             config['reservoir_units'] = self.reservoir_config.get('reservoir_units', [100, 50])
@@ -888,10 +1017,22 @@ class LSMGenerator(LSMBase):
                 if hasattr(self._trainer, 'system_message_processor') and self._trainer.system_message_processor:
                     self._system_processor = self._trainer.system_message_processor
                 else:
-                    self._system_processor = SystemMessageProcessor(
-                        tokenizer=self._trainer.tokenizer,
-                        embedder=self._trainer.embedder
-                    )
+                    # Try different constructor signatures for backward compatibility
+                    try:
+                        self._system_processor = SystemMessageProcessor(
+                            tokenizer=self._trainer.tokenizer,
+                            embedder=self._trainer.embedder
+                        )
+                    except TypeError:
+                        # Fallback to simpler constructor
+                        try:
+                            self._system_processor = SystemMessageProcessor(
+                                tokenizer=self._trainer.tokenizer
+                            )
+                        except TypeError:
+                            # Last fallback - create without parameters
+                            self._system_processor = SystemMessageProcessor()
+                            logger.warning("Created SystemMessageProcessor without parameters - some functionality may be limited")
             
             logger.info("Generation components initialized successfully")
             
@@ -915,11 +1056,133 @@ class LSMGenerator(LSMBase):
         # This is a placeholder - actual implementation would depend on SystemMessageProcessor interface
         return {"system_message": system_message}
     
+    def _initialize_enhanced_tokenization_system(self) -> None:
+        """Initialize the enhanced tokenization system for the trainer."""
+        try:
+            # Check if we should use enhanced tokenizer
+            if self.embedding_type != 'standard' or self.streaming or self.enable_caching:
+                logger.info("Initializing enhanced tokenization system...")
+                
+                # Create enhanced tokenizer wrapper
+                enhanced_tokenizer = self._create_enhanced_tokenizer()
+                
+                # Set the enhanced tokenizer on the trainer
+                if hasattr(self._trainer, 'set_enhanced_tokenizer'):
+                    self._trainer.set_enhanced_tokenizer(enhanced_tokenizer)
+                else:
+                    # Fallback: set tokenizer components directly
+                    self._trainer.tokenizer = enhanced_tokenizer
+                    
+                    # Create appropriate embedder based on embedding type
+                    if self.embedding_type in ['sinusoidal', 'configurable_sinusoidal']:
+                        if self.embedding_type == 'configurable_sinusoidal':
+                            embedder = enhanced_tokenizer.create_configurable_sinusoidal_embedder(
+                                **self.sinusoidal_config
+                            )
+                        else:
+                            embedder = enhanced_tokenizer.create_sinusoidal_embedder(
+                                **self.sinusoidal_config
+                            )
+                        self._trainer.embedder = embedder
+                
+                logger.info("Enhanced tokenization system initialized successfully")
+            else:
+                # Use standard tokenization system
+                logger.info("Using standard tokenization system...")
+                self._trainer.initialize_tokenization_system(max_length=self.max_length)
+                
+        except Exception as e:
+            logger.error(f"Failed to initialize enhanced tokenization system: {e}")
+            # Fallback to standard tokenization
+            logger.info("Falling back to standard tokenization system...")
+            self._trainer.initialize_tokenization_system(max_length=self.max_length)
+    
+    def _create_enhanced_tokenizer(self) -> 'EnhancedTokenizerWrapper':
+        """Create an enhanced tokenizer wrapper with the specified configuration."""
+        try:
+            # Create enhanced tokenizer wrapper
+            enhanced_tokenizer = EnhancedTokenizerWrapper(
+                tokenizer=self.tokenizer_name,
+                embedding_dim=self.embedding_dim,
+                max_length=self.max_length,
+                backend_specific_config=self.tokenizer_backend_config,
+                enable_caching=self.enable_caching
+            )
+            
+            logger.info(f"Created enhanced tokenizer: {enhanced_tokenizer}")
+            return enhanced_tokenizer
+            
+        except Exception as e:
+            logger.error(f"Failed to create enhanced tokenizer: {e}")
+            raise TrainingSetupError(f"Enhanced tokenizer creation failed: {e}")
+    
     def _apply_temperature(self, response: str, temperature: float) -> str:
         """Apply temperature scaling to response (placeholder implementation)."""
         # This is a simplified placeholder - actual temperature application
         # would happen during the generation process in the neural network
         return response
+    
+    def _train_with_streaming(self, X_train, y_train, X_test, y_test, 
+                             epochs: int, batch_size: int, verbose: bool, **fit_params):
+        """Train the model using streaming data processing."""
+        try:
+            # Get streaming configuration
+            streaming_batch_size = self.streaming_config.get('batch_size', batch_size)
+            memory_threshold_mb = self.streaming_config.get('memory_threshold_mb', 1000.0)
+            auto_adjust_batch_size = self.streaming_config.get('auto_adjust_batch_size', True)
+            
+            # Create streaming data iterator for training data
+            from ..data.streaming_data_iterator import StreamingDataIterator
+            
+            streaming_iterator = StreamingDataIterator(
+                data_source=X_train,
+                batch_size=streaming_batch_size,
+                memory_threshold_mb=memory_threshold_mb,
+                auto_adjust_batch_size=auto_adjust_batch_size
+            )
+            
+            # Use streaming training method
+            if self.response_level and hasattr(self._trainer, 'train_response_level_streaming'):
+                history = self._trainer.train_response_level_streaming(
+                    streaming_iterator=streaming_iterator,
+                    X_test=X_test,
+                    y_test=y_test,
+                    epochs=epochs,
+                    verbose=verbose,
+                    **fit_params
+                )
+            elif hasattr(self._trainer, 'train_streaming'):
+                history = self._trainer.train_streaming(
+                    streaming_iterator=streaming_iterator,
+                    X_test=X_test,
+                    y_test=y_test,
+                    epochs=epochs,
+                    verbose=verbose,
+                    **fit_params
+                )
+            else:
+                # Fallback to standard training with warning
+                logger.warning("Streaming training not available in trainer, using standard training")
+                if self.response_level:
+                    history = self._trainer.train_response_level(
+                        X_train=X_train, y_train=y_train,
+                        X_test=X_test, y_test=y_test,
+                        epochs=epochs, batch_size=batch_size,
+                        **fit_params
+                    )
+                else:
+                    history = self._trainer.train(
+                        X_train=X_train, y_train=y_train,
+                        X_test=X_test, y_test=y_test,
+                        epochs=epochs, batch_size=batch_size,
+                        **fit_params
+                    )
+            
+            return history
+            
+        except Exception as e:
+            logger.error(f"Streaming training failed: {e}")
+            raise TrainingExecutionError(epoch=None, reason=f"Streaming training failed: {e}")
     
     def _load_trainer(self, model_path: str) -> None:
         """Load the underlying trainer from saved model."""
@@ -939,6 +1202,133 @@ class LSMGenerator(LSMBase):
             logger.error(f"Failed to load trainer: {e}")
             raise ModelLoadError(model_path, f"Trainer loading failed: {e}")
     
+    def get_enhanced_tokenizer(self) -> Optional['EnhancedTokenizerWrapper']:
+        """
+        Get the enhanced tokenizer wrapper if available.
+        
+        Returns
+        -------
+        tokenizer : EnhancedTokenizerWrapper or None
+            The enhanced tokenizer wrapper, or None if using standard tokenizer
+        """
+        if hasattr(self._trainer, 'tokenizer') and isinstance(self._trainer.tokenizer, EnhancedTokenizerWrapper):
+            return self._trainer.tokenizer
+        return None
+    
+    def get_tokenizer_info(self) -> Dict[str, Any]:
+        """
+        Get information about the current tokenizer configuration.
+        
+        Returns
+        -------
+        info : dict
+            Dictionary containing tokenizer information
+        """
+        info = {
+            'tokenizer_name': self.tokenizer_name,
+            'embedding_type': self.embedding_type,
+            'streaming_enabled': self.streaming,
+            'caching_enabled': self.enable_caching,
+            'max_length': self.max_length
+        }
+        
+        enhanced_tokenizer = self.get_enhanced_tokenizer()
+        if enhanced_tokenizer:
+            info.update({
+                'vocab_size': enhanced_tokenizer.get_vocab_size(),
+                'backend': enhanced_tokenizer.get_adapter().config.backend,
+                'embedding_shape': enhanced_tokenizer.get_token_embeddings_shape()
+            })
+        
+        return info
+    
+    def create_tokenizer_for_inference(self) -> Union['StandardTokenizerWrapper', 'EnhancedTokenizerWrapper']:
+        """
+        Create a tokenizer instance suitable for inference.
+        
+        This method creates a tokenizer that matches the training configuration
+        but is optimized for inference use cases.
+        
+        Returns
+        -------
+        tokenizer : StandardTokenizerWrapper or EnhancedTokenizerWrapper
+            Tokenizer instance configured for inference
+        """
+        if self.embedding_type != 'standard' or self.enable_caching:
+            # Create enhanced tokenizer for inference
+            return self._create_enhanced_tokenizer()
+        else:
+            # Create standard tokenizer
+            return StandardTokenizerWrapper(
+                tokenizer_name=self.tokenizer_name,
+                max_length=self.max_length
+            )
+    
+    def fit_streaming(self, 
+                     data_source: Union[str, List[str]],
+                     validation_split: float = 0.2,
+                     epochs: int = 50,
+                     batch_size: int = 1000,
+                     verbose: bool = True,
+                     memory_threshold_mb: float = 1000.0,
+                     auto_optimize_memory: bool = True,
+                     **fit_params) -> 'LSMGenerator':
+        """
+        Train the LSM model on streaming data for memory-efficient processing.
+        
+        This method is specifically designed for large datasets that don't fit
+        in memory, using the enhanced tokenizer's streaming capabilities.
+        
+        Parameters
+        ----------
+        data_source : str or list
+            Data source for streaming (file path, directory, or list of texts)
+        validation_split : float, default=0.2
+            Fraction of data to use for validation
+        epochs : int, default=50
+            Number of training epochs
+        batch_size : int, default=1000
+            Batch size for streaming processing
+        verbose : bool, default=True
+            Whether to show training progress
+        memory_threshold_mb : float, default=1000.0
+            Memory threshold in MB for automatic batch size adjustment
+        auto_optimize_memory : bool, default=True
+            Whether to automatically optimize memory usage
+        **fit_params : dict
+            Additional parameters passed to the trainer
+            
+        Returns
+        -------
+        self : LSMGenerator
+            Returns self for method chaining
+        """
+        # Enable streaming for this training session
+        original_streaming = self.streaming
+        self.streaming = True
+        
+        # Update streaming config with provided parameters
+        self.streaming_config.update({
+            'batch_size': batch_size,
+            'memory_threshold_mb': memory_threshold_mb,
+            'auto_adjust_batch_size': auto_optimize_memory
+        })
+        
+        try:
+            # Use regular fit method with streaming enabled
+            return self.fit(
+                X=data_source,
+                validation_split=validation_split,
+                epochs=epochs,
+                batch_size=batch_size,
+                verbose=verbose,
+                auto_optimize_memory=auto_optimize_memory,
+                **fit_params
+            )
+        finally:
+            # Restore original streaming setting
+            self.streaming = original_streaming
+    
     def __sklearn_tags__(self):
         """Return sklearn tags for this estimator."""
         tags = super().__sklearn_tags__()
@@ -948,3 +1338,14 @@ class LSMGenerator(LSMBase):
             'text': True,  # Works with text data
         })
         return tags
+    
+    # Backward compatibility properties
+    @property
+    def tokenizer(self) -> str:
+        """Backward compatibility property for tokenizer name."""
+        return self.tokenizer_name
+    
+    @tokenizer.setter
+    def tokenizer(self, value: str) -> None:
+        """Backward compatibility setter for tokenizer name."""
+        self.tokenizer_name = value

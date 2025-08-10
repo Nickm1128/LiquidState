@@ -71,6 +71,48 @@ pip install -e .
 pip install -r requirements.txt
 ```
 
+### Issue: Enhanced tokenizer dependencies missing
+
+**Symptoms:**
+```python
+generator = LSMGenerator(tokenizer='bert-base-uncased')
+# ImportError: No module named 'transformers'
+```
+
+**Causes:**
+1. Missing tokenizer-specific dependencies
+2. Outdated package versions
+3. Conflicting package versions
+
+**Solutions:**
+
+**Solution 1: Install tokenizer dependencies**
+```bash
+# For HuggingFace tokenizers
+pip install transformers>=4.20.0
+
+# For OpenAI tokenizers
+pip install tiktoken>=0.4.0
+
+# For spaCy tokenizers
+pip install spacy>=3.4.0
+python -m spacy download en_core_web_sm
+```
+
+**Solution 2: Install all tokenizer dependencies**
+```bash
+pip install transformers tiktoken spacy
+python -m spacy download en_core_web_sm de_core_news_sm fr_core_news_sm
+```
+
+**Solution 3: Check installed versions**
+```python
+import transformers, tiktoken, spacy
+print(f"Transformers: {transformers.__version__}")
+print(f"Tiktoken: {tiktoken.__version__}")
+print(f"spaCy: {spacy.__version__}")
+```
+
 ### Issue: ConvenienceValidationError on import
 
 **Symptoms:**
@@ -143,6 +185,105 @@ except ConvenienceValidationError as e:
     print(f"Suggestion: {e.suggestion}")
 ```
 
+### Issue: Unsupported tokenizer backend
+
+**Symptoms:**
+```python
+generator = LSMGenerator(tokenizer='unsupported-model')
+# TokenizerError: Unsupported tokenizer backend 'unsupported-model'
+```
+
+**Causes:**
+1. Typo in tokenizer name
+2. Model not available in the backend
+3. Missing model dependencies
+
+**Solutions:**
+
+**Solution 1: Check supported tokenizers**
+```python
+from lsm.data.enhanced_tokenization import TokenizerRegistry
+backends = TokenizerRegistry.list_available_backends()
+print("Supported backends:", backends)
+
+# Check specific models
+from lsm.data.adapters.huggingface_adapter import HuggingFaceAdapter
+print("HuggingFace models:", list(HuggingFaceAdapter.SUPPORTED_MODELS.keys()))
+```
+
+**Solution 2: Use correct tokenizer names**
+```python
+# Correct HuggingFace model names
+generator = LSMGenerator(tokenizer='gpt2')
+generator = LSMGenerator(tokenizer='bert-base-uncased')
+generator = LSMGenerator(tokenizer='roberta-base')
+
+# Correct OpenAI model names
+generator = LSMGenerator(tokenizer='gpt-4')
+generator = LSMGenerator(tokenizer='gpt-3.5-turbo')
+
+# Correct spaCy model names
+generator = LSMGenerator(tokenizer='en_core_web_sm')
+```
+
+**Solution 3: Install missing models**
+```bash
+# For spaCy models
+python -m spacy download en_core_web_sm
+
+# For HuggingFace models (downloaded automatically)
+# Just ensure transformers is installed
+pip install transformers
+```
+
+### Issue: Incompatible embedding and tokenizer configuration
+
+**Symptoms:**
+```python
+generator = LSMGenerator(
+    tokenizer='gpt2',
+    embedding_type='configurable_sinusoidal',
+    embedding_dim=1000000  # Too large
+)
+# MemoryError: Cannot allocate memory for embedding matrix
+```
+
+**Causes:**
+1. Embedding dimension too large for vocabulary
+2. Incompatible tokenizer and embedding settings
+3. Insufficient memory for configuration
+
+**Solutions:**
+
+**Solution 1: Use appropriate embedding dimensions**
+```python
+# Check tokenizer vocabulary size first
+from lsm.data.enhanced_tokenization import EnhancedTokenizerWrapper
+tokenizer = EnhancedTokenizerWrapper('gpt2')
+vocab_size = tokenizer.get_vocab_size()
+print(f"Vocabulary size: {vocab_size}")
+
+# Use reasonable embedding dimension
+generator = LSMGenerator(
+    tokenizer='gpt2',
+    embedding_type='configurable_sinusoidal',
+    embedding_dim=min(512, vocab_size // 10)  # Reasonable size
+)
+```
+
+**Solution 2: Enable memory-efficient storage**
+```python
+generator = LSMGenerator(
+    tokenizer='gpt2',
+    embedding_type='configurable_sinusoidal',
+    embedding_dim=512,
+    embedding_config={
+        'use_memory_efficient_storage': True,
+        'use_compression': True
+    }
+)
+```
+
 ### Issue: Preset not found
 
 **Symptoms:**
@@ -172,6 +313,237 @@ for name, description in presets.items():
 generator = LSMGenerator(preset='fast')     # For experimentation
 generator = LSMGenerator(preset='balanced') # For general use
 generator = LSMGenerator(preset='quality')  # For production
+```
+
+## Enhanced Tokenizer and Streaming Issues
+
+### Issue: Streaming data processing fails
+
+**Symptoms:**
+```python
+generator = LSMGenerator(streaming=True)
+generator.fit('large_dataset.txt')
+# MemoryError: Out of memory during streaming
+```
+
+**Causes:**
+1. Batch size too large for available memory
+2. Memory threshold set too high
+3. Data format causing memory spikes
+4. Insufficient disk space for temporary files
+
+**Solutions:**
+
+**Solution 1: Configure streaming parameters**
+```python
+generator = LSMGenerator(
+    streaming=True,
+    embedding_type='sinusoidal'
+)
+generator.fit(
+    'large_dataset.txt',
+    streaming_config={
+        'batch_size': 500,  # Smaller initial batch size
+        'memory_threshold_mb': 200.0,  # Lower memory threshold
+        'auto_adjust_batch_size': True,
+        'min_batch_size': 50,
+        'max_batch_size': 2000
+    }
+)
+```
+
+**Solution 2: Monitor memory usage**
+```python
+def memory_callback(processed, total):
+    import psutil
+    memory_percent = psutil.virtual_memory().percent
+    print(f"Progress: {processed}/{total}, Memory: {memory_percent:.1f}%")
+
+generator.fit(
+    'large_dataset.txt',
+    streaming_config={
+        'progress_callback': memory_callback,
+        'auto_adjust_batch_size': True
+    }
+)
+```
+
+**Solution 3: Use memory-efficient data formats**
+```python
+# For JSON Lines format
+generator.fit(
+    'data.jsonl',
+    streaming_config={
+        'text_field': 'content',  # Specify text field
+        'extract_text': True      # Extract text automatically
+    }
+)
+```
+
+### Issue: Tokenizer loading is slow
+
+**Symptoms:**
+- First tokenization takes a long time
+- Model loading seems to hang
+- High disk I/O during initialization
+
+**Causes:**
+1. Large tokenizer models being downloaded
+2. No caching enabled
+3. Network issues during model download
+4. Insufficient disk space
+
+**Solutions:**
+
+**Solution 1: Enable caching and preloading**
+```python
+generator = LSMGenerator(
+    tokenizer='bert-base-uncased',
+    tokenizer_config={
+        'enable_caching': True,
+        'cache_config': {
+            'enable_cache_warming': True,
+            'warmup_strategy': 'frequency',
+            'warmup_size': 1000
+        }
+    }
+)
+```
+
+**Solution 2: Use local model cache**
+```python
+import os
+# Set HuggingFace cache directory
+os.environ['TRANSFORMERS_CACHE'] = '/path/to/local/cache'
+
+generator = LSMGenerator(tokenizer='bert-base-uncased')
+```
+
+**Solution 3: Pre-download models**
+```python
+# Pre-download models
+from transformers import AutoTokenizer
+AutoTokenizer.from_pretrained('bert-base-uncased')
+
+# Then use in generator
+generator = LSMGenerator(tokenizer='bert-base-uncased')
+```
+
+### Issue: Sinusoidal embedding training is unstable
+
+**Symptoms:**
+```python
+generator = LSMGenerator(embedding_type='configurable_sinusoidal')
+generator.fit(data)
+# Training loss oscillates or doesn't converge
+```
+
+**Causes:**
+1. Learning rate too high for frequency parameters
+2. Incompatible frequency initialization
+3. Gradient scaling issues
+4. Insufficient training data
+
+**Solutions:**
+
+**Solution 1: Adjust sinusoidal configuration**
+```python
+generator = LSMGenerator(
+    embedding_type='configurable_sinusoidal',
+    embedding_config={
+        'learnable_frequencies': True,
+        'frequency_init_std': 0.01,  # Smaller initialization
+        'base_frequency': 10000.0,   # Stable base frequency
+        'temperature': 0.5           # Lower temperature
+    }
+)
+```
+
+**Solution 2: Use mixed precision training**
+```python
+generator = LSMGenerator(
+    embedding_type='configurable_sinusoidal',
+    embedding_config={
+        'use_mixed_precision': True,
+        'gradient_checkpointing': True
+    }
+)
+```
+
+**Solution 3: Start with fixed frequencies**
+```python
+# Train with fixed frequencies first
+generator = LSMGenerator(
+    embedding_type='sinusoidal',  # Fixed frequencies
+    embedding_dim=256
+)
+generator.fit(data, epochs=20)
+
+# Then switch to learnable frequencies
+generator = LSMGenerator(
+    embedding_type='configurable_sinusoidal',
+    embedding_config={'learnable_frequencies': True}
+)
+generator.fit(data, epochs=30)
+```
+
+### Issue: Multi-language tokenization problems
+
+**Symptoms:**
+```python
+generator = LSMGenerator(tokenizer='en_core_web_sm')
+generator.fit(['Hello', 'Bonjour', '你好'])  # Mixed languages
+# TokenizerError: Unsupported characters in text
+```
+
+**Causes:**
+1. Language-specific tokenizer used for multi-language text
+2. Unicode normalization issues
+3. Missing language models
+4. Encoding problems
+
+**Solutions:**
+
+**Solution 1: Use multilingual tokenizers**
+```python
+# Use multilingual BERT
+generator = LSMGenerator(tokenizer='bert-base-multilingual-cased')
+
+# Or use GPT-2 which handles multiple languages
+generator = LSMGenerator(tokenizer='gpt2')
+```
+
+**Solution 2: Configure Unicode handling**
+```python
+generator = LSMGenerator(
+    tokenizer='en_core_web_sm',
+    tokenizer_config={
+        'backend_specific_config': {
+            'normalize_unicode': True,
+            'handle_mixed_languages': True
+        }
+    }
+)
+```
+
+**Solution 3: Preprocess text for language consistency**
+```python
+from langdetect import detect
+
+def preprocess_multilingual(texts):
+    # Group by language or use language-specific processing
+    processed = []
+    for text in texts:
+        try:
+            lang = detect(text)
+            # Apply language-specific preprocessing
+            processed.append(text)
+        except:
+            processed.append(text)  # Fallback
+    return processed
+
+texts = preprocess_multilingual(['Hello', 'Bonjour', '你好'])
+generator.fit(texts)
 ```
 
 ## Training Issues
@@ -255,17 +627,36 @@ generator = LSMGenerator(
 )
 ```
 
-**Solution 4: Process data in chunks**
+**Solution 4: Use streaming data processing**
 ```python
-# For very large datasets
-chunk_size = 1000
-for i in range(0, len(large_dataset), chunk_size):
-    chunk = large_dataset[i:i+chunk_size]
-    if i == 0:
-        generator.fit(chunk, epochs=10)
-    else:
-        # Continue training (if supported)
-        generator.partial_fit(chunk, epochs=5)
+# For very large datasets, use streaming
+generator = LSMGenerator(
+    streaming=True,
+    embedding_type='sinusoidal',
+    tokenizer_config={'enable_caching': True}
+)
+
+generator.fit(
+    'large_dataset.txt',  # File path for streaming
+    streaming_config={
+        'batch_size': 1000,
+        'auto_adjust_batch_size': True,
+        'memory_threshold_mb': 500.0
+    },
+    epochs=50
+)
+```
+
+**Solution 5: Enable memory-efficient embeddings**
+```python
+generator = LSMGenerator(
+    embedding_type='configurable_sinusoidal',
+    embedding_config={
+        'use_memory_efficient_storage': True,
+        'use_compression': True,
+        'gradient_checkpointing': True
+    }
+)
 ```
 
 ### Issue: Training is very slow
@@ -638,7 +1029,16 @@ generator = LSMGenerator(
     preset='fast',              # Smaller model
     batch_size=8,              # Smaller batches
     gradient_accumulation_steps=4,  # Maintain effective batch size
-    mixed_precision=True       # If supported
+    mixed_precision=True,       # If supported
+    embedding_type='sinusoidal',
+    embedding_config={
+        'use_memory_efficient_storage': True,
+        'use_compression': True
+    },
+    tokenizer_config={
+        'enable_caching': True,
+        'cache_config': {'max_cache_size': 5000}
+    }
 )
 ```
 
@@ -812,12 +1212,93 @@ When reporting issues, include:
 | Save/load issues | Check permissions | Use absolute paths |
 | Format issues | Convert data format | Use structured data |
 
+## Enhanced Tokenizer Quick Reference
+
+### Supported Tokenizer Backends
+
+| Backend | Example Models | Installation |
+|---------|----------------|--------------|
+| HuggingFace | `gpt2`, `bert-base-uncased`, `roberta-base` | `pip install transformers` |
+| OpenAI | `gpt-4`, `gpt-3.5-turbo`, `text-davinci-003` | `pip install tiktoken` |
+| spaCy | `en_core_web_sm`, `de_core_news_sm`, `fr_core_news_sm` | `pip install spacy && python -m spacy download en_core_web_sm` |
+
+### Common Enhanced Tokenizer Configurations
+
+```python
+# Basic sinusoidal embeddings
+generator = LSMGenerator(
+    tokenizer='gpt2',
+    embedding_type='sinusoidal',
+    embedding_dim=256
+)
+
+# Configurable sinusoidal with streaming
+generator = LSMGenerator(
+    tokenizer='bert-base-uncased',
+    embedding_type='configurable_sinusoidal',
+    streaming=True,
+    sinusoidal_config={
+        'learnable_frequencies': True,
+        'base_frequency': 5000.0
+    },
+    streaming_config={
+        'auto_adjust_batch_size': True,
+        'memory_threshold_mb': 500.0
+    }
+)
+
+# Performance optimized
+generator = LSMGenerator(
+    tokenizer='gpt2',
+    embedding_type='sinusoidal',
+    tokenizer_config={
+        'enable_caching': True,
+        'cache_config': {'enable_batch_caching': True}
+    },
+    embedding_config={
+        'enable_gpu_acceleration': True,
+        'use_mixed_precision': True
+    }
+)
+```
+
+### Troubleshooting Decision Tree
+
+1. **Import/Installation Issues**
+   - Missing dependencies → Install tokenizer libraries
+   - Module not found → Check Python path and installation
+
+2. **Configuration Issues**
+   - Unsupported tokenizer → Check supported models list
+   - Memory errors → Enable memory-efficient storage
+   - Slow performance → Enable caching and GPU acceleration
+
+3. **Training Issues**
+   - Out of memory → Use streaming or smaller batch sizes
+   - Slow training → Use performance optimizations
+   - Poor convergence → Adjust sinusoidal configuration
+
+4. **Streaming Issues**
+   - Memory spikes → Lower memory threshold
+   - Slow processing → Enable auto batch size adjustment
+   - Data format errors → Specify text field and extraction options
+
 ### Resources
 
 - **API Documentation**: `docs/CONVENIENCE_API_DOCUMENTATION.md`
+- **Enhanced Tokenizer Documentation**: `docs/ENHANCED_TOKENIZER_API_DOCUMENTATION.md`
 - **Getting Started**: `docs/GETTING_STARTED_TUTORIAL.md`
-- **Migration Guide**: `MIGRATION_GUIDE.md`
-- **Examples**: `examples/` directory
+- **Migration Guide**: `MIGRATION_GUIDE.md` (includes enhanced tokenizer migration)
+- **Examples**: `examples/` directory (includes enhanced tokenizer examples)
 - **Advanced Troubleshooting**: `docs/TROUBLESHOOTING_GUIDE.md`
 
-Remember: The convenience API is designed to be simple and forgiving. Most issues can be resolved by using presets, enabling automatic management features, or following the examples in the documentation.
+### Enhanced Tokenizer Examples
+
+- `examples/enhanced_tokenizer_api_examples.py` - Basic usage patterns
+- `examples/configurable_sinusoidal_embedder_demo.py` - Advanced embedding configuration
+- `examples/streaming_tokenizer_fitting_demo.py` - Streaming data processing
+- `examples/huggingface_adapter_demo.py` - HuggingFace tokenizer usage
+- `examples/tiktoken_adapter_demo.py` - OpenAI tokenizer usage
+- `examples/spacy_adapter_demo.py` - spaCy tokenizer usage
+
+Remember: The enhanced tokenizer system is designed to be backward compatible and self-configuring. Most issues can be resolved by enabling automatic features (streaming, caching, memory management) or using appropriate presets. When in doubt, start with basic configuration and gradually add advanced features.

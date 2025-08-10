@@ -718,39 +718,386 @@ def generate():
     return jsonify({'response': response})
 ```
 
+## Enhanced Tokenizer Migration
+
+### Overview
+
+The enhanced tokenizer system introduces powerful new features while maintaining full backward compatibility. This section helps you migrate from standard tokenizers to enhanced tokenizers with sinusoidal embeddings and streaming support.
+
+### Standard to Enhanced Tokenizer Migration
+
+#### Basic Migration
+
+**Before (Standard tokenizer):**
+```python
+from lsm import LSMGenerator
+
+generator = LSMGenerator(tokenizer='gpt2')
+generator.fit(conversations)
+response = generator.generate("Hello")
+```
+
+**After (Enhanced tokenizer):**
+```python
+from lsm import LSMGenerator
+
+# Same interface, enhanced capabilities
+generator = LSMGenerator(
+    tokenizer='gpt2',
+    embedding_type='sinusoidal',  # Add sinusoidal embeddings
+    embedding_dim=256
+)
+generator.fit(conversations)
+response = generator.generate("Hello")
+```
+
+#### Advanced Migration
+
+**Before (Custom tokenizer setup):**
+```python
+from transformers import AutoTokenizer
+from lsm import LSMGenerator
+
+# Manual tokenizer setup
+hf_tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
+generator = LSMGenerator(tokenizer=hf_tokenizer)
+```
+
+**After (Enhanced tokenizer with configuration):**
+```python
+from lsm import LSMGenerator
+
+# Automatic setup with enhanced features
+generator = LSMGenerator(
+    tokenizer='bert-base-uncased',
+    embedding_type='configurable_sinusoidal',
+    embedding_dim=512,
+    tokenizer_config={
+        'max_length': 256,
+        'enable_caching': True,
+        'cache_config': {
+            'max_cache_size': 20000,
+            'enable_batch_caching': True
+        }
+    },
+    sinusoidal_config={
+        'learnable_frequencies': True,
+        'base_frequency': 5000.0,
+        'use_relative_position': True
+    }
+)
+```
+
+### Streaming Data Migration
+
+#### From Memory-Limited to Streaming Processing
+
+**Before (Memory-limited):**
+```python
+# Limited by available memory
+with open('large_dataset.txt', 'r') as f:
+    data = f.read().split('\n')  # Loads entire file
+
+if len(data) > 10000:
+    data = data[:10000]  # Truncate to fit memory
+
+generator = LSMGenerator()
+generator.fit(data)
+```
+
+**After (Streaming processing):**
+```python
+# Process datasets of any size
+generator = LSMGenerator(
+    streaming=True,
+    embedding_type='sinusoidal',
+    tokenizer='gpt2'
+)
+
+generator.fit(
+    'large_dataset.txt',  # File path, not loaded into memory
+    streaming_config={
+        'batch_size': 2000,
+        'memory_threshold_mb': 500.0,
+        'auto_adjust_batch_size': True,
+        'progress_callback': lambda p, t: print(f"Progress: {p}/{t}")
+    },
+    epochs=50
+)
+```
+
+### Tokenizer Backend Migration
+
+#### From GPT-2 to Other Backends
+
+**HuggingFace Models:**
+```python
+# GPT-2 to BERT
+generator = LSMGenerator(
+    tokenizer='bert-base-uncased',  # Automatic vocabulary adaptation
+    embedding_type='sinusoidal'
+)
+
+# GPT-2 to RoBERTa
+generator = LSMGenerator(
+    tokenizer='roberta-base',
+    embedding_type='configurable_sinusoidal'
+)
+```
+
+**OpenAI Models:**
+```python
+# GPT-2 to GPT-4
+generator = LSMGenerator(
+    tokenizer='gpt-4',  # Uses tiktoken backend
+    embedding_type='sinusoidal',
+    embedding_dim=512
+)
+
+# GPT-2 to GPT-3.5
+generator = LSMGenerator(
+    tokenizer='gpt-3.5-turbo',
+    embedding_type='configurable_sinusoidal'
+)
+```
+
+**spaCy Models:**
+```python
+# GPT-2 to spaCy (for linguistic features)
+generator = LSMGenerator(
+    tokenizer='en_core_web_sm',
+    embedding_type='sinusoidal',
+    tokenizer_config={
+        'backend_specific_config': {
+            'disable_components': ['ner', 'parser'],  # Faster tokenization
+            'normalize_unicode': True
+        }
+    }
+)
+```
+
+### Performance Optimization Migration
+
+#### From Basic to Optimized Configuration
+
+**Before (Basic configuration):**
+```python
+generator = LSMGenerator(tokenizer='gpt2')
+generator.fit(data, batch_size=32)
+```
+
+**After (Optimized configuration):**
+```python
+generator = LSMGenerator(
+    tokenizer='gpt2',
+    embedding_type='configurable_sinusoidal',
+    embedding_config={
+        'enable_gpu_acceleration': True,
+        'use_mixed_precision': True,
+        'use_vectorized_operations': True,
+        'use_memory_efficient_storage': True
+    },
+    tokenizer_config={
+        'enable_caching': True,
+        'cache_config': {
+            'max_cache_size': 20000,
+            'enable_batch_caching': True,
+            'enable_cache_warming': True
+        }
+    }
+)
+
+generator.fit(
+    data,
+    batch_size=64,  # Larger batches with optimizations
+    streaming_config={'auto_adjust_batch_size': True}
+)
+```
+
+### Model Save/Load Migration
+
+Enhanced tokenizer models maintain compatibility with existing save/load patterns:
+
+**Before:**
+```python
+generator = LSMGenerator(tokenizer='gpt2')
+generator.fit(data)
+generator.save("my_model")
+
+loaded = LSMGenerator.load("my_model")
+```
+
+**After (Enhanced models save additional configuration):**
+```python
+generator = LSMGenerator(
+    tokenizer='bert-base-uncased',
+    embedding_type='configurable_sinusoidal'
+)
+generator.fit(data)
+generator.save("enhanced_model")  # Saves tokenizer and embedding config
+
+# Loading automatically restores all configuration
+loaded = LSMGenerator.load("enhanced_model")
+# Tokenizer backend, embedding type, and all configs restored
+```
+
+### Migration Checklist
+
+#### Phase 1: Basic Enhancement
+- [ ] Update tokenizer parameter to use enhanced backends
+- [ ] Add `embedding_type='sinusoidal'` for better temporal modeling
+- [ ] Test with existing data to ensure compatibility
+- [ ] Verify model save/load functionality
+
+#### Phase 2: Advanced Features
+- [ ] Enable streaming for large datasets (`streaming=True`)
+- [ ] Configure tokenizer caching (`tokenizer_config`)
+- [ ] Optimize embedding configuration (`embedding_config`)
+- [ ] Add progress monitoring for long training runs
+
+#### Phase 3: Performance Optimization
+- [ ] Enable GPU acceleration if available
+- [ ] Configure memory-efficient storage for large vocabularies
+- [ ] Implement intelligent caching strategies
+- [ ] Optimize batch sizes for your hardware
+
+### Common Migration Issues
+
+#### Issue: Different tokenizer vocabulary sizes
+
+**Problem:**
+```python
+# Old model trained with GPT-2 (vocab_size=50257)
+old_generator = LSMGenerator.load("gpt2_model")
+
+# New model with BERT (vocab_size=30522)
+new_generator = LSMGenerator(tokenizer='bert-base-uncased')
+# Vocabulary size mismatch
+```
+
+**Solution:**
+```python
+# Enhanced tokenizers automatically adapt
+new_generator = LSMGenerator(
+    tokenizer='bert-base-uncased',
+    embedding_type='configurable_sinusoidal'
+)
+# Embedding layer automatically adapts to new vocabulary size
+new_generator.fit(data)  # Retrain with new tokenizer
+```
+
+#### Issue: Memory usage increase with enhanced features
+
+**Problem:**
+```python
+# Enhanced features use more memory
+generator = LSMGenerator(
+    tokenizer='bert-base-uncased',
+    embedding_type='configurable_sinusoidal',
+    embedding_dim=1024  # Large embedding dimension
+)
+# OutOfMemoryError
+```
+
+**Solution:**
+```python
+# Enable memory optimizations
+generator = LSMGenerator(
+    tokenizer='bert-base-uncased',
+    embedding_type='configurable_sinusoidal',
+    embedding_dim=512,  # Reasonable size
+    embedding_config={
+        'use_memory_efficient_storage': True,
+        'use_compression': True,
+        'gradient_checkpointing': True
+    },
+    streaming=True  # Enable streaming for large datasets
+)
+```
+
+### Migration Testing
+
+#### Validation Script
+
+```python
+def validate_migration(old_model_path, new_config):
+    """Validate that migration preserves functionality."""
+    
+    # Load old model
+    old_generator = LSMGenerator.load(old_model_path)
+    
+    # Create new enhanced model
+    new_generator = LSMGenerator(**new_config)
+    
+    # Test data
+    test_prompts = ["Hello", "How are you?", "What's the weather?"]
+    
+    # Compare basic functionality
+    for prompt in test_prompts:
+        try:
+            old_response = old_generator.generate(prompt)
+            print(f"Old model response: {old_response}")
+        except Exception as e:
+            print(f"Old model failed: {e}")
+        
+        try:
+            # Train new model briefly for comparison
+            new_generator.fit(["Hello", "Hi there"], epochs=1)
+            new_response = new_generator.generate(prompt)
+            print(f"New model response: {new_response}")
+        except Exception as e:
+            print(f"New model failed: {e}")
+
+# Example usage
+new_config = {
+    'tokenizer': 'bert-base-uncased',
+    'embedding_type': 'sinusoidal',
+    'embedding_dim': 256
+}
+
+validate_migration("old_gpt2_model", new_config)
+```
+
 ## Timeline and Deprecation Schedule
 
 ### Current Phase (v2.0+)
 - ✅ Convenience API fully available
+- ✅ Enhanced tokenizer system available
 - ✅ Legacy imports work with deprecation warnings
 - ✅ All examples updated to show both approaches
 - ✅ Migration guide available
+- ✅ Streaming data processing available
 
 ### Next Phase (v2.5+)
+- 🔄 Enhanced tokenizers become default in convenience API
 - 🔄 Convenience API becomes primary in documentation
 - 🔄 Legacy imports show stronger warnings
 - 🔄 New features primarily in convenience API
+- 🔄 Standard tokenizers deprecated in favor of enhanced tokenizers
 
 ### Future Phase (v3.0+)
 - ⏳ Legacy root-level imports may be removed
 - ⏳ Full migration to src/ structure required
+- ⏳ Enhanced tokenizers become the only tokenizer system
 - ⏳ Convenience API becomes standard interface
 
 ### Recommendation Timeline
 
 **Immediate (Now):**
-- New projects: Use convenience API
-- Existing projects: Start planning migration
-- Learning: Focus on convenience API
+- New projects: Use convenience API with enhanced tokenizers
+- Existing projects: Start planning migration to enhanced tokenizers
+- Learning: Focus on convenience API with sinusoidal embeddings
 
 **Short term (3-6 months):**
-- Migrate simple scripts to convenience API
+- Migrate simple scripts to enhanced tokenizers
+- Enable streaming for large datasets
 - Update imports to src/ structure
 - Test new functionality
 
 **Long term (6-12 months):**
-- Complete migration of all projects
+- Complete migration of all projects to enhanced tokenizers
 - Remove legacy import dependencies
-- Adopt new best practices
+- Adopt streaming and performance optimizations
+- Implement advanced sinusoidal embedding configurations
 
-We recommend migrating to the convenience API for new projects and gradually updating existing code. The convenience API provides the same functionality with much simpler usage patterns.
+We recommend migrating to the enhanced tokenizer system for new projects and gradually updating existing code. The enhanced tokenizers provide significantly better performance and capabilities while maintaining full backward compatibility.

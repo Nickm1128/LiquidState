@@ -545,6 +545,96 @@ class SinusoidalEmbedder:
             raise TokenizerNotFittedError("get_embedding_matrix")
         return self._embedding_matrix.copy()
     
+    def fit_batch(self, batch_data: np.ndarray) -> None:
+        """
+        Fit embeddings on a single batch of data for streaming training.
+        
+        This method is used during streaming training to incrementally
+        build embeddings from batches of data.
+        
+        Args:
+            batch_data: Token sequences for this batch (batch_size, seq_len)
+        """
+        if self._embedding_matrix is None:
+            # First batch - initialize embeddings
+            self._embedding_matrix = self._initialize_embeddings()
+            self._positional_encodings = self._create_positional_encodings()
+            logger.info("Initialized embeddings for streaming training")
+        
+        # Convert batch to embeddings
+        batch_embeddings = self._embed_sequences(batch_data)
+        
+        # Calculate sinusoidality score for this batch
+        sin_score = self._calculate_sinusoidality_score(batch_embeddings)
+        
+        # Calculate and apply gradients for this batch
+        gradients = self._calculate_gradients(batch_data, batch_embeddings)
+        self._embedding_matrix -= self._learning_rate * gradients
+        
+        # Normalize embeddings
+        norms = np.linalg.norm(self._embedding_matrix, axis=1, keepdims=True)
+        self._embedding_matrix = self._embedding_matrix / (norms + 1e-8)
+        
+        logger.debug(f"Processed batch: {len(batch_data)} sequences, "
+                    f"sinusoidality score: {sin_score:.4f}")
+    
+    def update_batch(self, batch_data: np.ndarray) -> None:
+        """
+        Update embeddings with a new batch of data during multi-epoch streaming training.
+        
+        This method is used in subsequent epochs to refine embeddings
+        based on additional data batches.
+        
+        Args:
+            batch_data: Token sequences for this batch (batch_size, seq_len)
+        """
+        if self._embedding_matrix is None:
+            raise TokenizerNotFittedError("update_batch - call fit_batch first")
+        
+        # Convert batch to embeddings with current embedding matrix
+        batch_embeddings = self._embed_sequences(batch_data)
+        
+        # Calculate gradients with reduced learning rate for updates
+        update_learning_rate = self._learning_rate * 0.5  # Reduced for stability
+        gradients = self._calculate_gradients(batch_data, batch_embeddings)
+        
+        # Apply gradients
+        self._embedding_matrix -= update_learning_rate * gradients
+        
+        # Normalize embeddings
+        norms = np.linalg.norm(self._embedding_matrix, axis=1, keepdims=True)
+        self._embedding_matrix = self._embedding_matrix / (norms + 1e-8)
+        
+        logger.debug(f"Updated embeddings with batch: {len(batch_data)} sequences")
+    
+    def finalize_training(self) -> None:
+        """
+        Finalize streaming training by performing final optimization steps.
+        
+        This method should be called after all streaming batches have been processed
+        to perform any final optimization and mark the embedder as fitted.
+        """
+        if self._embedding_matrix is None:
+            raise TokenizerNotFittedError("finalize_training - no batches processed")
+        
+        logger.info("Finalizing streaming training...")
+        
+        # Perform final normalization
+        norms = np.linalg.norm(self._embedding_matrix, axis=1, keepdims=True)
+        self._embedding_matrix = self._embedding_matrix / (norms + 1e-8)
+        
+        # Calculate final sinusoidality score
+        # Create a sample to evaluate final quality
+        sample_tokens = np.arange(min(100, self.vocab_size)).reshape(1, -1)
+        if sample_tokens.shape[1] > 0:
+            sample_embeddings = self._embed_sequences(sample_tokens)
+            final_score = self._calculate_sinusoidality_score(sample_embeddings)
+            logger.info(f"Final sinusoidality score: {final_score:.4f}")
+        
+        # Mark as fitted
+        self._is_fitted = True
+        logger.info("Streaming training finalized successfully")
+    
     def save(self, save_path: str):
         """
         Save embedder to disk.

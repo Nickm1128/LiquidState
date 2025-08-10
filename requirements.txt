@@ -6,11 +6,13 @@ scikit-learn>=1.0.0
 requests>=2.25.0
 datasets>=2.14.0  # HuggingFace datasets for cosmopedia-v2 integration
 
-# Optional dependencies for enhanced functionality
-matplotlib>=3.5.0  # For visualization
-seaborn>=0.11.0    # For advanced plotting
-matplotlib
-pytest
-seaborn
-train
-psutil
+# Enhanced tokenizer system dependencies
+transformers>=4.21.0  # HuggingFace tokenizer support
+tiktoken>=0.5.0       # OpenAI tokenizer support
+spacy>=3.4.0          # spaCy tokenizer support
+psutil>=5.8.0         # Memory monitoring for streaming data
+
+# Visualization and development dependencies
+matplotlib>=3.5.0     # For visualization
+seaborn>=0.11.0       # For advanced plotting
+pytest>=7.0.0         # Testing framework

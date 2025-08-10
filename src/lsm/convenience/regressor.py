@@ -33,18 +33,40 @@ from ..utils.lsm_logging import get_logger
 
 logger = get_logger(__name__)
 
-# Import training components directly
-try:
-    from ..training.train import LSMTrainer
-    from ..data.tokenization import StandardTokenizerWrapper, SinusoidalEmbedder
-    _TRAINING_AVAILABLE = True
-    logger.info("Training components loaded successfully")
-except ImportError as e:
-    logger.warning(f"Training components not available: {e}")
-    LSMTrainer = None
-    StandardTokenizerWrapper = None
-    SinusoidalEmbedder = None
-    _TRAINING_AVAILABLE = False
+# Lazy import flag - components will be imported when needed
+_TRAINING_AVAILABLE = None
+LSMTrainer = None
+StandardTokenizerWrapper = None
+SinusoidalEmbedder = None
+EnhancedTokenizerWrapper = None
+
+def _check_training_components():
+    """Lazy import of training components to avoid circular imports."""
+    global _TRAINING_AVAILABLE, LSMTrainer, StandardTokenizerWrapper, SinusoidalEmbedder, EnhancedTokenizerWrapper
+    
+    if _TRAINING_AVAILABLE is not None:
+        return _TRAINING_AVAILABLE
+    
+    try:
+        from ..training.train import LSMTrainer as _LSMTrainer
+        from ..data.tokenization import StandardTokenizerWrapper as _StandardTokenizerWrapper
+        from ..data.tokenization import SinusoidalEmbedder as _SinusoidalEmbedder
+        from ..data.enhanced_tokenization import EnhancedTokenizerWrapper as _EnhancedTokenizerWrapper
+        
+        # Assign to module-level variables
+        LSMTrainer = _LSMTrainer
+        StandardTokenizerWrapper = _StandardTokenizerWrapper
+        SinusoidalEmbedder = _SinusoidalEmbedder
+        EnhancedTokenizerWrapper = _EnhancedTokenizerWrapper
+        
+        _TRAINING_AVAILABLE = True
+        logger.info("Training components loaded successfully")
+        
+    except ImportError as e:
+        logger.warning(f"Training components not available: {e}")
+        _TRAINING_AVAILABLE = False
+    
+    return _TRAINING_AVAILABLE
 
 
 class LSMRegressor(LSMBase, RegressorMixin):
@@ -78,6 +100,23 @@ class LSMRegressor(LSMBase, RegressorMixin):
         Whether to use time series prediction mode with lag features
     n_lags : int, default=5
         Number of lag features to use in time series mode
+    tokenizer : str, default='gpt2'
+        Name of the tokenizer to use ('gpt2', 'bert-base-uncased', etc.)
+        Can be any supported tokenizer backend (HuggingFace, OpenAI, spaCy, custom)
+    max_length : int, default=512
+        Maximum sequence length for tokenization
+    embedding_type : str, default='standard'
+        Type of embedding to use ('standard', 'sinusoidal', 'configurable_sinusoidal')
+    sinusoidal_config : dict, optional
+        Configuration for sinusoidal embeddings when embedding_type is 'sinusoidal' or 'configurable_sinusoidal'
+    streaming : bool, default=False
+        Whether to enable streaming data processing for large datasets
+    streaming_config : dict, optional
+        Configuration for streaming data processing
+    tokenizer_backend_config : dict, optional
+        Backend-specific configuration for the tokenizer
+    enable_caching : bool, default=True
+        Whether to enable intelligent caching for tokenization
     random_state : int, optional
         Random seed for reproducibility
     **kwargs : dict
@@ -105,6 +144,30 @@ class LSMRegressor(LSMBase, RegressorMixin):
     >>> regressor.fit(X, y)
     >>> predictions = regressor.predict([[4, 5, 6]])
     >>> 
+    >>> # With enhanced sinusoidal embeddings
+    >>> regressor = LSMRegressor(
+    ...     tokenizer='gpt2',
+    ...     embedding_type='configurable_sinusoidal',
+    ...     sinusoidal_config={'learnable_frequencies': True, 'base_frequency': 10000.0}
+    ... )
+    >>> regressor.fit(X, y)
+    >>> predictions = regressor.predict([[4, 5, 6]])
+    >>> 
+    >>> # With streaming for large datasets
+    >>> regressor = LSMRegressor(
+    ...     streaming=True,
+    ...     streaming_config={'batch_size': 1000, 'memory_threshold_mb': 1000.0}
+    ... )
+    >>> regressor.fit_streaming("path/to/large/dataset.txt", y)
+    >>> 
+    >>> # With different tokenizer backends
+    >>> regressor = LSMRegressor(
+    ...     tokenizer='bert-base-uncased',  # HuggingFace tokenizer
+    ...     embedding_type='sinusoidal',
+    ...     enable_caching=True
+    ... )
+    >>> regressor.fit(X, y)
+    >>> 
     >>> # Time series prediction
     >>> regressor = LSMRegressor(
     ...     reservoir_type='echo_state',
@@ -125,6 +188,14 @@ class LSMRegressor(LSMBase, RegressorMixin):
                  normalize_targets: bool = True,
                  time_series_mode: bool = False,
                  n_lags: int = 5,
+                 tokenizer: str = 'gpt2',
+                 max_length: int = 512,
+                 embedding_type: str = 'standard',
+                 sinusoidal_config: Optional[Dict[str, Any]] = None,
+                 streaming: bool = False,
+                 streaming_config: Optional[Dict[str, Any]] = None,
+                 tokenizer_backend_config: Optional[Dict[str, Any]] = None,
+                 enable_caching: bool = True,
                  random_state: Optional[int] = None,
                  **kwargs):
         
@@ -137,6 +208,13 @@ class LSMRegressor(LSMBase, RegressorMixin):
                 'leak_rate': 0.1  # For echo state networks
             }
         
+        # Check if training components are available (lazy import)
+        if not _check_training_components():
+            raise ImportError(
+                "LSM training components are not available. "
+                "Please ensure TensorFlow and all dependencies are installed."
+            )
+        
         # Store regression-specific parameters
         self.regressor_type = regressor_type
         self.regressor_config = regressor_config or {}
@@ -144,6 +222,16 @@ class LSMRegressor(LSMBase, RegressorMixin):
         self.normalize_targets = normalize_targets
         self.time_series_mode = time_series_mode
         self.n_lags = n_lags
+        
+        # Enhanced tokenizer parameters
+        self.tokenizer_name = tokenizer
+        self.max_length = max_length
+        self.embedding_type = embedding_type
+        self.sinusoidal_config = sinusoidal_config or {}
+        self.streaming = streaming
+        self.streaming_config = streaming_config or {}
+        self.tokenizer_backend_config = tokenizer_backend_config or {}
+        self.enable_caching = enable_caching
         
         # Initialize base class
         super().__init__(
@@ -159,6 +247,18 @@ class LSMRegressor(LSMBase, RegressorMixin):
         self._downstream_regressor = None
         self._feature_extractor = None
         self._target_scaler = None
+        self._enhanced_tokenizer = None
+        
+        # Store enhanced tokenizer configuration
+        self._enhanced_tokenizer_config = {
+            'embedding_type': self.embedding_type,
+            'sinusoidal_config': self.sinusoidal_config.copy(),
+            'streaming': self.streaming,
+            'streaming_config': self.streaming_config.copy(),
+            'tokenizer_backend_config': self.tokenizer_backend_config.copy(),
+            'enable_caching': self.enable_caching,
+            'max_length': self.max_length
+        }
         
         # sklearn-compatible attributes
         self.feature_names_in_ = None
@@ -201,6 +301,62 @@ class LSMRegressor(LSMBase, RegressorMixin):
                     f"regressor_config must be a dictionary, got {type(self.regressor_config).__name__}",
                     suggestion="Pass regressor configuration as a dictionary: {'alpha': 1.0, 'max_iter': 1000}"
                 )
+            
+            # Validate enhanced tokenizer parameters
+            self.max_length = validate_positive_integer(
+                self.max_length, 'max_length', min_value=1, max_value=2048
+            )
+            
+            # Validate tokenizer name
+            if not isinstance(self.tokenizer_name, str):
+                raise ConvenienceValidationError(
+                    f"tokenizer must be a string, got {type(self.tokenizer_name).__name__}",
+                    suggestion="Use a tokenizer name like 'gpt2', 'bert-base-uncased', or any supported backend"
+                )
+            
+            # Validate embedding type
+            valid_embedding_types = ['standard', 'sinusoidal', 'configurable_sinusoidal']
+            if self.embedding_type not in valid_embedding_types:
+                raise ConvenienceValidationError(
+                    f"Invalid embedding_type: {self.embedding_type}",
+                    suggestion="Use 'standard' for basic embeddings, 'sinusoidal' for sinusoidal embeddings, or 'configurable_sinusoidal' for advanced sinusoidal embeddings",
+                    valid_options=valid_embedding_types
+                )
+            
+            # Validate sinusoidal config
+            if not isinstance(self.sinusoidal_config, dict):
+                raise ConvenienceValidationError(
+                    f"sinusoidal_config must be a dictionary, got {type(self.sinusoidal_config).__name__}",
+                    suggestion="Pass sinusoidal configuration as a dictionary: {'learnable_frequencies': True, 'base_frequency': 10000.0}"
+                )
+            
+            # Validate streaming config
+            if not isinstance(self.streaming_config, dict):
+                raise ConvenienceValidationError(
+                    f"streaming_config must be a dictionary, got {type(self.streaming_config).__name__}",
+                    suggestion="Pass streaming configuration as a dictionary: {'batch_size': 1000, 'memory_threshold_mb': 1000.0}"
+                )
+            
+            # Validate tokenizer backend config
+            if not isinstance(self.tokenizer_backend_config, dict):
+                raise ConvenienceValidationError(
+                    f"tokenizer_backend_config must be a dictionary, got {type(self.tokenizer_backend_config).__name__}",
+                    suggestion="Pass backend configuration as a dictionary: {'trust_remote_code': True, 'use_fast': True}"
+                )
+            
+            # Validate streaming flag
+            if not isinstance(self.streaming, bool):
+                raise ConvenienceValidationError(
+                    f"streaming must be boolean, got {type(self.streaming).__name__}",
+                    suggestion="Use True to enable streaming for large datasets, False to disable"
+                )
+            
+            # Validate caching flag
+            if not isinstance(self.enable_caching, bool):
+                raise ConvenienceValidationError(
+                    f"enable_caching must be boolean, got {type(self.enable_caching).__name__}",
+                    suggestion="Use True to enable intelligent caching (recommended), False to disable"
+                )
         
         except Exception as e:
             logger.error(f"Regression parameter validation failed: {e}")
@@ -237,7 +393,9 @@ class LSMRegressor(LSMBase, RegressorMixin):
         # Extract regression-specific parameters
         reg_params = {}
         for param in ['regressor_type', 'regressor_config', 'feature_extraction', 
-                      'normalize_targets', 'time_series_mode', 'n_lags']:
+                      'normalize_targets', 'time_series_mode', 'n_lags',
+                      'embedding_type', 'sinusoidal_config', 'streaming', 
+                      'streaming_config', 'tokenizer_backend_config', 'enable_caching']:
             if param in config:
                 reg_params[param] = config.pop(param)
         
@@ -289,6 +447,12 @@ class LSMRegressor(LSMBase, RegressorMixin):
             # Store feature information for sklearn compatibility
             self.feature_names_in_ = [f'feature_{i}' for i in range(X_processed.shape[1])]
             self.n_features_in_ = X_processed.shape[1]
+            
+            # Initialize enhanced tokenizer if needed
+            if verbose:
+                logger.info("Initializing enhanced tokenizer...")
+            
+            self._enhanced_tokenizer = self._create_enhanced_tokenizer()
             
             # Set up target scaling if requested
             if self.normalize_targets:
@@ -370,14 +534,14 @@ class LSMRegressor(LSMBase, RegressorMixin):
                 reason=f"LSM regression training failed: {e}"
             )
     
-    def predict(self, X: Union[List[List[float]], np.ndarray]) -> np.ndarray:
+    def predict(self, X: Union[List[List[float]], List[str], np.ndarray]) -> np.ndarray:
         """
         Predict continuous values for sequential data.
         
         Parameters
         ----------
-        X : list or array-like of shape (n_samples, n_features)
-            Sequential data to predict
+        X : list or array-like of shape (n_samples, n_features) or list of strings
+            Sequential data to predict. Can be numerical data or text strings when using enhanced tokenizer
             
         Returns
         -------
@@ -387,11 +551,19 @@ class LSMRegressor(LSMBase, RegressorMixin):
         self._check_is_fitted()
         
         try:
-            # Preprocess input data
-            X_processed = self._preprocess_prediction_data(X)
-            
-            # Extract features
-            X_features = self._extract_temporal_features(X_processed)
+            # Check if input is text data and we have enhanced tokenizer
+            if isinstance(X, list) and len(X) > 0 and isinstance(X[0], str) and self._enhanced_tokenizer is not None:
+                # Handle text data with enhanced tokenizer
+                token_sequences = self._enhanced_tokenizer.tokenize(
+                    X, add_special_tokens=True, padding=True, truncation=True
+                )
+                X_features = self._extract_enhanced_features(np.array(token_sequences))
+                n_samples = len(X)
+            else:
+                # Handle numerical data
+                X_processed = self._preprocess_prediction_data(X)
+                X_features = self._extract_temporal_features(X_processed)
+                n_samples = len(X_processed)
             
             # Make predictions using downstream regressor
             y_pred_scaled = self._downstream_regressor.predict(X_features)
@@ -402,7 +574,7 @@ class LSMRegressor(LSMBase, RegressorMixin):
             else:
                 y_pred = y_pred_scaled
             
-            logger.debug(f"Made predictions for {len(X_processed)} samples")
+            logger.debug(f"Made predictions for {n_samples} samples")
             
             return y_pred
             
@@ -780,3 +952,368 @@ class LSMRegressor(LSMBase, RegressorMixin):
             'multilabel': False,
         })
         return tags
+    
+    def _create_enhanced_tokenizer(self) -> 'EnhancedTokenizerWrapper':
+        """Create an enhanced tokenizer wrapper with the specified configuration."""
+        try:
+            # Create enhanced tokenizer wrapper
+            enhanced_tokenizer = EnhancedTokenizerWrapper(
+                tokenizer=self.tokenizer_name,
+                embedding_dim=self.embedding_dim,
+                max_length=self.max_length,
+                backend_specific_config=self.tokenizer_backend_config,
+                enable_caching=self.enable_caching
+            )
+            
+            logger.info(f"Created enhanced tokenizer: {enhanced_tokenizer}")
+            return enhanced_tokenizer
+            
+        except Exception as e:
+            logger.error(f"Failed to create enhanced tokenizer: {e}")
+            raise TrainingSetupError(f"Enhanced tokenizer creation failed: {e}")
+    
+    def fit_streaming(self, 
+                     data_source: Union[str, List[str], 'StreamingDataIterator'],
+                     y: Union[List[float], np.ndarray],
+                     batch_size: int = 1000,
+                     epochs: int = 30,
+                     memory_threshold_mb: float = 1000.0,
+                     progress_callback: Optional[callable] = None,
+                     auto_adjust_batch_size: bool = True,
+                     min_batch_size: int = 100,
+                     max_batch_size: int = 10000,
+                     verbose: bool = True,
+                     **fit_params) -> 'LSMRegressor':
+        """
+        Fit the regressor on streaming data for memory-efficient training.
+        
+        This method processes large datasets that don't fit in memory by using
+        streaming data processing with configurable batch sizes, progress tracking,
+        and memory usage monitoring.
+        
+        Parameters
+        ----------
+        data_source : str, list, or StreamingDataIterator
+            Data source (file path, directory, file list, or StreamingDataIterator)
+        y : list or array-like of shape (n_samples,)
+            Target continuous values
+        batch_size : int, default=1000
+            Initial batch size for processing
+        epochs : int, default=30
+            Number of training epochs
+        memory_threshold_mb : float, default=1000.0
+            Memory threshold in MB for automatic batch size adjustment
+        progress_callback : callable, optional
+            Optional callback function for progress updates
+        auto_adjust_batch_size : bool, default=True
+            Whether to automatically adjust batch size based on memory
+        min_batch_size : int, default=100
+            Minimum allowed batch size
+        max_batch_size : int, default=10000
+            Maximum allowed batch size
+        verbose : bool, default=True
+            Whether to show training progress
+        **fit_params : dict
+            Additional parameters
+            
+        Returns
+        -------
+        self : LSMRegressor
+            Returns self for method chaining
+            
+        Raises
+        ------
+        InvalidInputError
+            If invalid parameters provided
+        TrainingExecutionError
+            If streaming training fails
+        """
+        try:
+            if verbose:
+                logger.info("Starting LSM regression streaming training...")
+            
+            # Validate parameters
+            if batch_size <= 0:
+                raise InvalidInputError("batch_size", "positive integer", str(batch_size))
+            if epochs <= 0:
+                raise InvalidInputError("epochs", "positive integer", str(epochs))
+            if memory_threshold_mb <= 0:
+                raise InvalidInputError("memory_threshold_mb", "positive float", str(memory_threshold_mb))
+            if min_batch_size <= 0 or min_batch_size > max_batch_size:
+                raise InvalidInputError("min_batch_size", f"positive integer <= {max_batch_size}", str(min_batch_size))
+            
+            # Initialize enhanced tokenizer
+            if verbose:
+                logger.info("Initializing enhanced tokenizer for streaming...")
+            
+            self._enhanced_tokenizer = self._create_enhanced_tokenizer()
+            
+            # Handle different data source types
+            if isinstance(data_source, list) and isinstance(data_source[0], str):
+                # Direct text data - process in batches
+                def batch_generator(data, batch_size):
+                    for i in range(0, len(data), batch_size):
+                        yield data[i:i + batch_size]
+                
+                streaming_iterator = batch_generator(data_source, batch_size)
+                use_streaming_iterator = False
+            else:
+                # File-based data source - use StreamingDataIterator
+                from ..data.streaming_data_iterator import StreamingDataIterator
+                
+                if isinstance(data_source, StreamingDataIterator):
+                    streaming_iterator = data_source
+                else:
+                    streaming_iterator = StreamingDataIterator(
+                        data_source=data_source,
+                        batch_size=batch_size,
+                        memory_threshold_mb=memory_threshold_mb,
+                        auto_adjust_batch_size=auto_adjust_batch_size,
+                        progress_callback=progress_callback
+                    )
+                use_streaming_iterator = True
+            
+            # Process streaming data and collect features
+            all_features = []
+            all_targets = []
+            
+            if isinstance(y, list):
+                y = np.array(y)
+            
+            target_idx = 0
+            
+            for batch_data in streaming_iterator:
+                # Process batch data to extract features
+                if isinstance(batch_data, list) and isinstance(batch_data[0], str):
+                    # Text data - tokenize and extract features
+                    token_sequences = self._enhanced_tokenizer.tokenize(
+                        batch_data, add_special_tokens=True, padding=True, truncation=True
+                    )
+                    batch_features = self._extract_enhanced_features(np.array(token_sequences))
+                else:
+                    # Numerical data - extract temporal features
+                    batch_features = self._extract_temporal_features(np.array(batch_data))
+                
+                # Get corresponding targets
+                batch_size_actual = len(batch_data)
+                batch_targets = y[target_idx:target_idx + batch_size_actual]
+                target_idx += batch_size_actual
+                
+                all_features.append(batch_features)
+                all_targets.append(batch_targets)
+                
+                if verbose and progress_callback:
+                    progress_callback(f"Processed {target_idx} samples")
+            
+            # Combine all features and targets
+            X_features = np.vstack(all_features)
+            y_combined = np.concatenate(all_targets)
+            
+            # Set up target scaling if requested
+            if self.normalize_targets:
+                self._target_scaler = StandardScaler()
+                y_scaled = self._target_scaler.fit_transform(y_combined.reshape(-1, 1)).ravel()
+                self.target_scaler_ = self._target_scaler
+            else:
+                y_scaled = y_combined
+                self.target_scaler_ = None
+            
+            # Train downstream regressor
+            if verbose:
+                logger.info(f"Training {self.regressor_type} regressor on streaming data...")
+            
+            start_time = time.time()
+            
+            self._downstream_regressor = self._create_downstream_regressor()
+            self._downstream_regressor.fit(X_features, y_scaled)
+            
+            regressor_training_time = time.time() - start_time
+            
+            # Calculate training metrics
+            y_pred_scaled = self._downstream_regressor.predict(X_features)
+            if self.normalize_targets:
+                y_pred = self._target_scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
+            else:
+                y_pred = y_pred_scaled
+            
+            train_r2 = r2_score(y_combined, y_pred)
+            train_mse = mean_squared_error(y_combined, y_pred)
+            train_mae = mean_absolute_error(y_combined, y_pred)
+            
+            # Store training metadata
+            self._training_metadata = {
+                'regressor_training_time': regressor_training_time,
+                'epochs': epochs,
+                'batch_size': batch_size,
+                'data_size': len(y_combined),
+                'n_features': X_features.shape[1],
+                'feature_extraction': self.feature_extraction,
+                'regressor_type': self.regressor_type,
+                'normalize_targets': self.normalize_targets,
+                'time_series_mode': self.time_series_mode,
+                'streaming': True,
+                'train_r2': train_r2,
+                'train_mse': train_mse,
+                'train_mae': train_mae
+            }
+            
+            # Store performance metrics
+            self._performance_metrics = {
+                'train_r2_score': train_r2,
+                'train_mse': train_mse,
+                'train_mae': train_mae,
+                'n_samples': len(y_combined),
+                'n_features': X_features.shape[1]
+            }
+            
+            # Store feature information for sklearn compatibility
+            self.feature_names_in_ = [f'feature_{i}' for i in range(X_features.shape[1])]
+            self.n_features_in_ = X_features.shape[1]
+            
+            self._is_fitted = True
+            
+            if verbose:
+                logger.info(f"Streaming regression training completed in {regressor_training_time:.2f} seconds")
+                logger.info(f"Trained on {len(y_combined)} samples with {X_features.shape[1]} features")
+                logger.info(f"Training R² score: {train_r2:.4f}")
+            
+            return self
+            
+        except Exception as e:
+            logger.error(f"Streaming regression training failed: {e}")
+            raise TrainingExecutionError(
+                epoch=None,
+                reason=f"LSM streaming regression training failed: {e}"
+            )
+    
+    def _extract_enhanced_features(self, token_sequences: np.ndarray) -> np.ndarray:
+        """Extract features using enhanced tokenizer and sinusoidal embeddings."""
+        try:
+            # Use sinusoidal embeddings if configured
+            if self.embedding_type in ['sinusoidal', 'configurable_sinusoidal']:
+                # Create sinusoidal embedder if not exists
+                if not hasattr(self, '_sinusoidal_embedder') or self._sinusoidal_embedder is None:
+                    if self.embedding_type == 'configurable_sinusoidal':
+                        self._sinusoidal_embedder = self._enhanced_tokenizer.create_configurable_sinusoidal_embedder(
+                            **self.sinusoidal_config
+                        )
+                    else:
+                        self._sinusoidal_embedder = self._enhanced_tokenizer.create_sinusoidal_embedder()
+                        # Fit the sinusoidal embedder on the token sequences
+                        self._sinusoidal_embedder.fit(token_sequences)
+                
+                # Get sinusoidal embeddings
+                embeddings = self._sinusoidal_embedder.embed_sequences(token_sequences)
+                
+                # Extract features from embeddings
+                features_list = []
+                
+                # Statistical features from embeddings
+                features_list.append(np.mean(embeddings, axis=1))  # Mean embedding
+                features_list.append(np.std(embeddings, axis=1))   # Std embedding
+                features_list.append(np.max(embeddings, axis=1))   # Max embedding
+                features_list.append(np.min(embeddings, axis=1))   # Min embedding
+                
+                # Combine features
+                X_features = np.column_stack(features_list)
+            else:
+                # Use standard token-based features
+                X_features = self._extract_token_features(token_sequences)
+            
+            logger.debug(f"Extracted enhanced features shape: {X_features.shape}")
+            return X_features
+            
+        except Exception as e:
+            logger.error(f"Enhanced feature extraction failed: {e}")
+            # Fallback to token-based features
+            return self._extract_token_features(token_sequences)
+    
+    def _extract_token_features(self, token_sequences: np.ndarray) -> np.ndarray:
+        """Extract features from token sequences."""
+        try:
+            features_list = []
+            
+            for sequence in token_sequences:
+                # Basic sequence statistics
+                seq_features = []
+                
+                # Length features
+                seq_features.append(len(sequence))
+                seq_features.append(np.count_nonzero(sequence))  # Non-zero tokens
+                
+                # Statistical features
+                seq_features.append(np.mean(sequence))
+                seq_features.append(np.std(sequence))
+                seq_features.append(np.max(sequence))
+                seq_features.append(np.min(sequence))
+                
+                # Token distribution features
+                token_counts = np.bincount(sequence, minlength=min(1000, self._enhanced_tokenizer.get_vocab_size()))
+                top_tokens = np.sort(token_counts)[-10:]  # Top 10 token frequencies
+                seq_features.extend(top_tokens)
+                
+                # Positional features
+                if len(sequence) > 1:
+                    seq_features.append(sequence[0])   # First token
+                    seq_features.append(sequence[-1])  # Last token
+                    seq_features.append(np.mean(np.diff(sequence)))  # Mean difference
+                else:
+                    seq_features.extend([0, 0, 0])
+                
+                features_list.append(seq_features)
+            
+            X_features = np.array(features_list)
+            
+            # Handle any NaN values
+            X_features = np.nan_to_num(X_features, nan=0.0, posinf=1e6, neginf=-1e6)
+            
+            return X_features
+            
+        except Exception as e:
+            logger.error(f"Token feature extraction failed: {e}")
+            # Minimal fallback
+            return np.array([[len(seq), np.mean(seq), np.std(seq)] for seq in token_sequences])
+    
+    def get_enhanced_tokenizer(self) -> Optional['EnhancedTokenizerWrapper']:
+        """
+        Get the enhanced tokenizer wrapper.
+        
+        Returns
+        -------
+        tokenizer : EnhancedTokenizerWrapper or None
+            The enhanced tokenizer wrapper if available
+        """
+        return self._enhanced_tokenizer
+    
+    def get_tokenizer_info(self) -> Dict[str, Any]:
+        """
+        Get information about the tokenizer configuration.
+        
+        Returns
+        -------
+        info : dict
+            Dictionary containing tokenizer information
+        """
+        info = {
+            'tokenizer_name': self.tokenizer_name,
+            'max_length': self.max_length,
+            'embedding_type': self.embedding_type,
+            'sinusoidal_config': self.sinusoidal_config,
+            'streaming': self.streaming,
+            'streaming_config': self.streaming_config,
+            'tokenizer_backend_config': self.tokenizer_backend_config,
+            'enable_caching': self.enable_caching,
+            'enhanced_tokenizer_available': self._enhanced_tokenizer is not None
+        }
+        
+        if self._enhanced_tokenizer is not None:
+            try:
+                info.update({
+                    'vocab_size': self._enhanced_tokenizer.get_vocab_size(),
+                    'adapter_backend': self._enhanced_tokenizer.get_adapter().config.backend,
+                    'special_tokens': self._enhanced_tokenizer.get_special_tokens()
+                })
+            except Exception as e:
+                logger.warning(f"Failed to get enhanced tokenizer info: {e}")
+        
+        return info

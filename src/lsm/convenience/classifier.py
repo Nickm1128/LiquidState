@@ -33,18 +33,40 @@ from ..utils.lsm_logging import get_logger
 
 logger = get_logger(__name__)
 
-# Import training components directly
-try:
-    from ..training.train import LSMTrainer
-    from ..data.tokenization import StandardTokenizerWrapper, SinusoidalEmbedder
-    _TRAINING_AVAILABLE = True
-    logger.info("Training components loaded successfully")
-except ImportError as e:
-    logger.warning(f"Training components not available: {e}")
-    LSMTrainer = None
-    StandardTokenizerWrapper = None
-    SinusoidalEmbedder = None
-    _TRAINING_AVAILABLE = False
+# Lazy import flag - components will be imported when needed
+_TRAINING_AVAILABLE = None
+LSMTrainer = None
+StandardTokenizerWrapper = None
+SinusoidalEmbedder = None
+EnhancedTokenizerWrapper = None
+
+def _check_training_components():
+    """Lazy import of training components to avoid circular imports."""
+    global _TRAINING_AVAILABLE, LSMTrainer, StandardTokenizerWrapper, SinusoidalEmbedder, EnhancedTokenizerWrapper
+    
+    if _TRAINING_AVAILABLE is not None:
+        return _TRAINING_AVAILABLE
+    
+    try:
+        from ..training.train import LSMTrainer as _LSMTrainer
+        from ..data.tokenization import StandardTokenizerWrapper as _StandardTokenizerWrapper
+        from ..data.tokenization import SinusoidalEmbedder as _SinusoidalEmbedder
+        from ..data.enhanced_tokenization import EnhancedTokenizerWrapper as _EnhancedTokenizerWrapper
+        
+        # Assign to module-level variables
+        LSMTrainer = _LSMTrainer
+        StandardTokenizerWrapper = _StandardTokenizerWrapper
+        SinusoidalEmbedder = _SinusoidalEmbedder
+        EnhancedTokenizerWrapper = _EnhancedTokenizerWrapper
+        
+        _TRAINING_AVAILABLE = True
+        logger.info("Training components loaded successfully")
+        
+    except ImportError as e:
+        logger.warning(f"Training components not available: {e}")
+        _TRAINING_AVAILABLE = False
+    
+    return _TRAINING_AVAILABLE
 
 
 class LSMClassifier(LSMBase, ClassifierMixin):
@@ -73,6 +95,23 @@ class LSMClassifier(LSMBase, ClassifierMixin):
         Configuration for the downstream classifier
     feature_extraction : str, default='mean'
         How to extract features from reservoir states ('mean', 'last', 'max', 'concat')
+    tokenizer : str, default='gpt2'
+        Name of the tokenizer to use ('gpt2', 'bert-base-uncased', etc.)
+        Can be any supported tokenizer backend (HuggingFace, OpenAI, spaCy, custom)
+    max_length : int, default=512
+        Maximum sequence length for tokenization
+    embedding_type : str, default='standard'
+        Type of embedding to use ('standard', 'sinusoidal', 'configurable_sinusoidal')
+    sinusoidal_config : dict, optional
+        Configuration for sinusoidal embeddings when embedding_type is 'sinusoidal' or 'configurable_sinusoidal'
+    streaming : bool, default=False
+        Whether to enable streaming data processing for large datasets
+    streaming_config : dict, optional
+        Configuration for streaming data processing
+    tokenizer_backend_config : dict, optional
+        Backend-specific configuration for the tokenizer
+    enable_caching : bool, default=True
+        Whether to enable intelligent caching for tokenization
     random_state : int, optional
         Random seed for reproducibility
     **kwargs : dict
@@ -102,6 +141,30 @@ class LSMClassifier(LSMBase, ClassifierMixin):
     >>> classifier.fit(X, y)
     >>> predictions = classifier.predict(["New positive text"])
     >>> 
+    >>> # With enhanced sinusoidal embeddings
+    >>> classifier = LSMClassifier(
+    ...     tokenizer='gpt2',
+    ...     embedding_type='configurable_sinusoidal',
+    ...     sinusoidal_config={'learnable_frequencies': True, 'base_frequency': 10000.0}
+    ... )
+    >>> classifier.fit(X, y)
+    >>> predictions = classifier.predict(["New positive text"])
+    >>> 
+    >>> # With different tokenizer backends
+    >>> classifier = LSMClassifier(
+    ...     tokenizer='bert-base-uncased',  # HuggingFace tokenizer
+    ...     embedding_type='sinusoidal',
+    ...     enable_caching=True
+    ... )
+    >>> classifier.fit(X, y)
+    >>> 
+    >>> # With streaming for large datasets
+    >>> classifier = LSMClassifier(
+    ...     streaming=True,
+    ...     streaming_config={'batch_size': 1000, 'memory_threshold_mb': 1000.0}
+    ... )
+    >>> classifier.fit(X, y)
+    >>> 
     >>> # With custom configuration
     >>> classifier = LSMClassifier(
     ...     reservoir_type='hierarchical',
@@ -120,6 +183,14 @@ class LSMClassifier(LSMBase, ClassifierMixin):
                  classifier_type: str = 'logistic',
                  classifier_config: Optional[Dict[str, Any]] = None,
                  feature_extraction: str = 'mean',
+                 tokenizer: str = 'gpt2',
+                 max_length: int = 512,
+                 embedding_type: str = 'standard',
+                 sinusoidal_config: Optional[Dict[str, Any]] = None,
+                 streaming: bool = False,
+                 streaming_config: Optional[Dict[str, Any]] = None,
+                 tokenizer_backend_config: Optional[Dict[str, Any]] = None,
+                 enable_caching: bool = True,
                  random_state: Optional[int] = None,
                  **kwargs):
         
@@ -131,11 +202,28 @@ class LSMClassifier(LSMBase, ClassifierMixin):
                 'spectral_radius': 0.9
             }
         
+        # Check if training components are available (lazy import)
+        if not _check_training_components():
+            raise ImportError(
+                "LSM training components are not available. "
+                "Please ensure TensorFlow and all dependencies are installed."
+            )
+        
         # Store classification-specific parameters
         self.n_classes = n_classes
         self.classifier_type = classifier_type
         self.classifier_config = classifier_config or {}
         self.feature_extraction = feature_extraction
+        
+        # Enhanced tokenizer parameters
+        self.tokenizer_name = tokenizer
+        self.max_length = max_length
+        self.embedding_type = embedding_type
+        self.sinusoidal_config = sinusoidal_config or {}
+        self.streaming = streaming
+        self.streaming_config = streaming_config or {}
+        self.tokenizer_backend_config = tokenizer_backend_config or {}
+        self.enable_caching = enable_caching
         
         # Initialize base class
         super().__init__(
@@ -151,6 +239,19 @@ class LSMClassifier(LSMBase, ClassifierMixin):
         self._label_encoder = None
         self._downstream_classifier = None
         self._feature_extractor = None
+        self._enhanced_tokenizer = None
+        self._trainer = None
+        
+        # Store enhanced tokenizer configuration
+        self._enhanced_tokenizer_config = {
+            'embedding_type': self.embedding_type,
+            'sinusoidal_config': self.sinusoidal_config.copy(),
+            'streaming': self.streaming,
+            'streaming_config': self.streaming_config.copy(),
+            'tokenizer_backend_config': self.tokenizer_backend_config.copy(),
+            'enable_caching': self.enable_caching,
+            'max_length': self.max_length
+        }
         
         # sklearn-compatible attributes
         self.classes_ = None
@@ -194,6 +295,62 @@ class LSMClassifier(LSMBase, ClassifierMixin):
                     f"classifier_config must be a dictionary, got {type(self.classifier_config).__name__}",
                     suggestion="Pass classifier configuration as a dictionary: {'C': 1.0, 'max_iter': 1000}"
                 )
+            
+            # Validate enhanced tokenizer parameters
+            self.max_length = validate_positive_integer(
+                self.max_length, 'max_length', min_value=1, max_value=2048
+            )
+            
+            # Validate tokenizer name
+            if not isinstance(self.tokenizer_name, str):
+                raise ConvenienceValidationError(
+                    f"tokenizer must be a string, got {type(self.tokenizer_name).__name__}",
+                    suggestion="Use a tokenizer name like 'gpt2', 'bert-base-uncased', or any supported backend"
+                )
+            
+            # Validate embedding type
+            valid_embedding_types = ['standard', 'sinusoidal', 'configurable_sinusoidal']
+            if self.embedding_type not in valid_embedding_types:
+                raise ConvenienceValidationError(
+                    f"Invalid embedding_type: {self.embedding_type}",
+                    suggestion="Use 'standard' for basic embeddings, 'sinusoidal' for sinusoidal embeddings, or 'configurable_sinusoidal' for advanced sinusoidal embeddings",
+                    valid_options=valid_embedding_types
+                )
+            
+            # Validate sinusoidal config
+            if not isinstance(self.sinusoidal_config, dict):
+                raise ConvenienceValidationError(
+                    f"sinusoidal_config must be a dictionary, got {type(self.sinusoidal_config).__name__}",
+                    suggestion="Pass sinusoidal configuration as a dictionary: {'learnable_frequencies': True, 'base_frequency': 10000.0}"
+                )
+            
+            # Validate streaming config
+            if not isinstance(self.streaming_config, dict):
+                raise ConvenienceValidationError(
+                    f"streaming_config must be a dictionary, got {type(self.streaming_config).__name__}",
+                    suggestion="Pass streaming configuration as a dictionary: {'batch_size': 1000, 'memory_threshold_mb': 1000.0}"
+                )
+            
+            # Validate tokenizer backend config
+            if not isinstance(self.tokenizer_backend_config, dict):
+                raise ConvenienceValidationError(
+                    f"tokenizer_backend_config must be a dictionary, got {type(self.tokenizer_backend_config).__name__}",
+                    suggestion="Pass backend configuration as a dictionary: {'trust_remote_code': True, 'use_fast': True}"
+                )
+            
+            # Validate streaming flag
+            if not isinstance(self.streaming, bool):
+                raise ConvenienceValidationError(
+                    f"streaming must be boolean, got {type(self.streaming).__name__}",
+                    suggestion="Use True to enable streaming for large datasets, False to disable"
+                )
+            
+            # Validate caching flag
+            if not isinstance(self.enable_caching, bool):
+                raise ConvenienceValidationError(
+                    f"enable_caching must be boolean, got {type(self.enable_caching).__name__}",
+                    suggestion="Use True to enable intelligent caching (recommended), False to disable"
+                )
         
         except Exception as e:
             logger.error(f"Classification parameter validation failed: {e}")
@@ -229,7 +386,9 @@ class LSMClassifier(LSMBase, ClassifierMixin):
         
         # Extract classification-specific parameters
         class_params = {}
-        for param in ['n_classes', 'classifier_type', 'classifier_config', 'feature_extraction']:
+        for param in ['n_classes', 'classifier_type', 'classifier_config', 'feature_extraction',
+                     'tokenizer', 'max_length', 'embedding_type', 'sinusoidal_config',
+                     'streaming', 'streaming_config', 'tokenizer_backend_config', 'enable_caching']:
             if param in config:
                 class_params[param] = config.pop(param)
         
@@ -293,11 +452,17 @@ class LSMClassifier(LSMBase, ClassifierMixin):
             if self.n_classes is None:
                 self.n_classes = self.n_classes_
             
-            # Extract features using TF-IDF (simplified version)
+            # Initialize enhanced tokenizer
+            if verbose:
+                logger.info("Initializing enhanced tokenizer...")
+            
+            self._enhanced_tokenizer = self._create_enhanced_tokenizer()
+            
+            # Extract features using enhanced tokenizer or TF-IDF fallback
             if verbose:
                 logger.info("Extracting text features...")
             
-            X_features = self._extract_simple_features(X_processed)
+            X_features = self._extract_features(X_processed)
             
             # Train downstream classifier
             if verbose:
@@ -359,7 +524,7 @@ class LSMClassifier(LSMBase, ClassifierMixin):
             X_processed = self._preprocess_prediction_data(X)
             
             # Extract features
-            X_features = self._extract_simple_features(X_processed)
+            X_features = self._extract_features(X_processed)
             
             # Make predictions using downstream classifier
             y_pred_encoded = self._downstream_classifier.predict(X_features)
@@ -408,7 +573,7 @@ class LSMClassifier(LSMBase, ClassifierMixin):
             X_processed = self._preprocess_prediction_data(X)
             
             # Extract features
-            X_features = self._extract_simple_features(X_processed)
+            X_features = self._extract_features(X_processed)
             
             # Get probability predictions
             probabilities = self._downstream_classifier.predict_proba(X_features)
@@ -538,6 +703,117 @@ class LSMClassifier(LSMBase, ClassifierMixin):
                 suggestion="Use string, list of strings, or numpy array"
             )
     
+    def _extract_features(self, X: List[str]) -> np.ndarray:
+        """Extract text features using enhanced tokenizer or TF-IDF fallback."""
+        try:
+            # Try to use enhanced tokenizer for feature extraction
+            if self._enhanced_tokenizer is not None:
+                return self._extract_enhanced_features(X)
+            else:
+                # Fallback to TF-IDF features
+                return self._extract_simple_features(X)
+                
+        except Exception as e:
+            logger.error(f"Feature extraction failed: {e}")
+            # Final fallback to TF-IDF
+            return self._extract_simple_features(X)
+    
+    def _extract_enhanced_features(self, X: List[str]) -> np.ndarray:
+        """Extract features using the enhanced tokenizer."""
+        try:
+            # Tokenize texts
+            token_sequences = self._enhanced_tokenizer.tokenize(
+                X, add_special_tokens=True, padding=True, truncation=True
+            )
+            
+            # Convert to numpy array
+            token_array = np.array(token_sequences)
+            
+            # For now, use simple aggregation of token embeddings
+            # In a full implementation, this would use reservoir states
+            if self.embedding_type in ['sinusoidal', 'configurable_sinusoidal']:
+                # Create sinusoidal embedder if needed
+                if not hasattr(self, '_sinusoidal_embedder') or self._sinusoidal_embedder is None:
+                    if self.embedding_type == 'configurable_sinusoidal':
+                        self._sinusoidal_embedder = self._enhanced_tokenizer.create_configurable_sinusoidal_embedder(
+                            **self.sinusoidal_config
+                        )
+                    else:
+                        self._sinusoidal_embedder = self._enhanced_tokenizer.create_sinusoidal_embedder()
+                        # Fit the sinusoidal embedder on the token sequences
+                        self._sinusoidal_embedder.fit(np.array(token_sequences))
+                
+                # Get embeddings for tokens
+                embeddings = []
+                for sequence in token_sequences:
+                    # Convert tokens to embeddings using the correct interface
+                    if self.embedding_type == 'configurable_sinusoidal':
+                        # ConfigurableSinusoidalEmbedder uses call method (Keras layer)
+                        import tensorflow as tf
+                        sequence_tensor = tf.constant([sequence], dtype=tf.int32)
+                        seq_embeddings = self._sinusoidal_embedder(sequence_tensor, training=False).numpy()[0]
+                    else:
+                        # SinusoidalEmbedder uses embed method
+                        seq_embeddings = self._sinusoidal_embedder.embed(sequence)
+                    
+                    # Aggregate embeddings based on feature extraction method
+                    if self.feature_extraction == 'mean':
+                        agg_embedding = np.mean(seq_embeddings, axis=0)
+                    elif self.feature_extraction == 'last':
+                        agg_embedding = seq_embeddings[-1]
+                    elif self.feature_extraction == 'max':
+                        agg_embedding = np.max(seq_embeddings, axis=0)
+                    elif self.feature_extraction == 'concat':
+                        # Flatten and truncate/pad to fixed size
+                        flat_embedding = seq_embeddings.flatten()
+                        target_size = self.embedding_dim * 10  # Reasonable fixed size
+                        if len(flat_embedding) > target_size:
+                            agg_embedding = flat_embedding[:target_size]
+                        else:
+                            agg_embedding = np.pad(flat_embedding, (0, target_size - len(flat_embedding)))
+                    else:
+                        agg_embedding = np.mean(seq_embeddings, axis=0)
+                    
+                    embeddings.append(agg_embedding)
+                
+                X_features = np.array(embeddings)
+            else:
+                # For standard embeddings, use simple token statistics
+                X_features = self._extract_token_statistics(token_array)
+            
+            logger.debug(f"Extracted enhanced features shape: {X_features.shape}")
+            return X_features
+            
+        except Exception as e:
+            logger.error(f"Enhanced feature extraction failed: {e}")
+            # Fallback to simple features
+            return self._extract_simple_features(X)
+    
+    def _extract_token_statistics(self, token_array: np.ndarray) -> np.ndarray:
+        """Extract statistical features from token sequences."""
+        features = []
+        
+        for sequence in token_array:
+            # Basic statistics
+            seq_len = len(sequence)
+            unique_tokens = len(set(sequence))
+            avg_token_id = np.mean(sequence)
+            std_token_id = np.std(sequence)
+            
+            # Token distribution features
+            token_counts = np.bincount(sequence, minlength=min(1000, self._enhanced_tokenizer.get_vocab_size()))
+            top_tokens = np.sort(token_counts)[-10:]  # Top 10 token frequencies
+            
+            # Combine features
+            seq_features = np.concatenate([
+                [seq_len, unique_tokens, avg_token_id, std_token_id],
+                top_tokens
+            ])
+            
+            features.append(seq_features)
+        
+        return np.array(features)
+    
     def _extract_simple_features(self, X: List[str]) -> np.ndarray:
         """Extract simple text features using TF-IDF."""
         try:
@@ -565,6 +841,25 @@ class LSMClassifier(LSMBase, ClassifierMixin):
             logger.warning("Using random features as fallback")
             return X_features
     
+    def _create_enhanced_tokenizer(self) -> 'EnhancedTokenizerWrapper':
+        """Create an enhanced tokenizer wrapper with the specified configuration."""
+        try:
+            # Create enhanced tokenizer wrapper
+            enhanced_tokenizer = EnhancedTokenizerWrapper(
+                tokenizer=self.tokenizer_name,
+                embedding_dim=self.embedding_dim,
+                max_length=self.max_length,
+                backend_specific_config=self.tokenizer_backend_config,
+                enable_caching=self.enable_caching
+            )
+            
+            logger.info(f"Created enhanced tokenizer: {enhanced_tokenizer}")
+            return enhanced_tokenizer
+            
+        except Exception as e:
+            logger.error(f"Failed to create enhanced tokenizer: {e}")
+            raise TrainingSetupError(f"Enhanced tokenizer creation failed: {e}")
+    
     def _create_downstream_classifier(self):
         """Create the downstream classifier."""
         if self.classifier_type == 'logistic':
@@ -590,6 +885,188 @@ class LSMClassifier(LSMBase, ClassifierMixin):
                 f"Unsupported classifier type: {self.classifier_type}",
                 valid_options=['logistic', 'random_forest']
             )
+    
+    def save_model(self, save_path: str, include_tokenizer: bool = True) -> None:
+        """
+        Save the trained classifier model.
+        
+        Parameters
+        ----------
+        save_path : str
+            Directory path to save the model
+        include_tokenizer : bool, default=True
+            Whether to save the enhanced tokenizer configuration
+        """
+        self._check_is_fitted()
+        
+        try:
+            import os
+            import pickle
+            
+            # Create save directory
+            os.makedirs(save_path, exist_ok=True)
+            
+            # Save classifier components
+            model_data = {
+                'downstream_classifier': self._downstream_classifier,
+                'label_encoder': self._label_encoder,
+                'feature_extractor': self._feature_extractor,
+                'classes_': self.classes_,
+                'n_classes_': self.n_classes_,
+                'feature_names_in_': self.feature_names_in_,
+                'n_features_in_': self.n_features_in_,
+                'training_metadata': self._training_metadata,
+                'classifier_config': {
+                    'window_size': self.window_size,
+                    'embedding_dim': self.embedding_dim,
+                    'reservoir_type': self.reservoir_type,
+                    'reservoir_config': self.reservoir_config,
+                    'n_classes': self.n_classes,
+                    'classifier_type': self.classifier_type,
+                    'classifier_config': self.classifier_config,
+                    'feature_extraction': self.feature_extraction,
+                    'tokenizer_name': self.tokenizer_name,
+                    'max_length': self.max_length,
+                    'embedding_type': self.embedding_type,
+                    'sinusoidal_config': self.sinusoidal_config,
+                    'streaming': self.streaming,
+                    'streaming_config': self.streaming_config,
+                    'tokenizer_backend_config': self.tokenizer_backend_config,
+                    'enable_caching': self.enable_caching,
+                    'random_state': self.random_state
+                }
+            }
+            
+            # Save main model data
+            model_path = os.path.join(save_path, 'lsm_classifier.pkl')
+            with open(model_path, 'wb') as f:
+                pickle.dump(model_data, f)
+            
+            # Save enhanced tokenizer if available and requested
+            if include_tokenizer and self._enhanced_tokenizer is not None:
+                try:
+                    self._enhanced_tokenizer.get_adapter().save_adapter_config(save_path)
+                    
+                    # Save sinusoidal embedder if available
+                    if hasattr(self, '_sinusoidal_embedder') and self._sinusoidal_embedder is not None:
+                        embedder_path = os.path.join(save_path, 'sinusoidal_embedder.pkl')
+                        with open(embedder_path, 'wb') as f:
+                            pickle.dump(self._sinusoidal_embedder, f)
+                    
+                    logger.info(f"Enhanced tokenizer saved to {save_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to save enhanced tokenizer: {e}")
+            
+            logger.info(f"LSMClassifier model saved to {save_path}")
+            
+        except Exception as e:
+            logger.error(f"Model save failed: {e}")
+            raise ModelLoadError(f"Failed to save model: {e}")
+    
+    @classmethod
+    def load_model(cls, load_path: str) -> 'LSMClassifier':
+        """
+        Load a trained classifier model.
+        
+        Parameters
+        ----------
+        load_path : str
+            Directory path to load the model from
+            
+        Returns
+        -------
+        classifier : LSMClassifier
+            Loaded classifier instance
+        """
+        try:
+            import os
+            import pickle
+            
+            # Load main model data
+            model_path = os.path.join(load_path, 'lsm_classifier.pkl')
+            with open(model_path, 'rb') as f:
+                model_data = pickle.load(f)
+            
+            # Create classifier instance with saved configuration
+            config = model_data['classifier_config']
+            classifier = cls(**config)
+            
+            # Restore classifier components
+            classifier._downstream_classifier = model_data['downstream_classifier']
+            classifier._label_encoder = model_data['label_encoder']
+            classifier._feature_extractor = model_data['feature_extractor']
+            classifier.classes_ = model_data['classes_']
+            classifier.n_classes_ = model_data['n_classes_']
+            classifier.feature_names_in_ = model_data['feature_names_in_']
+            classifier.n_features_in_ = model_data['n_features_in_']
+            classifier._training_metadata = model_data['training_metadata']
+            classifier._is_fitted = True
+            
+            # Try to restore enhanced tokenizer
+            try:
+                classifier._enhanced_tokenizer = classifier._create_enhanced_tokenizer()
+                
+                # Try to load sinusoidal embedder if available
+                embedder_path = os.path.join(load_path, 'sinusoidal_embedder.pkl')
+                if os.path.exists(embedder_path):
+                    with open(embedder_path, 'rb') as f:
+                        classifier._sinusoidal_embedder = pickle.load(f)
+                
+                logger.info("Enhanced tokenizer restored successfully")
+            except Exception as e:
+                logger.warning(f"Failed to restore enhanced tokenizer: {e}")
+                classifier._enhanced_tokenizer = None
+            
+            logger.info(f"LSMClassifier model loaded from {load_path}")
+            return classifier
+            
+        except Exception as e:
+            logger.error(f"Model load failed: {e}")
+            raise ModelLoadError(f"Failed to load model from {load_path}: {e}")
+    
+    def get_enhanced_tokenizer(self) -> Optional['EnhancedTokenizerWrapper']:
+        """
+        Get the enhanced tokenizer wrapper.
+        
+        Returns
+        -------
+        tokenizer : EnhancedTokenizerWrapper or None
+            The enhanced tokenizer wrapper if available
+        """
+        return self._enhanced_tokenizer
+    
+    def get_tokenizer_info(self) -> Dict[str, Any]:
+        """
+        Get information about the tokenizer configuration.
+        
+        Returns
+        -------
+        info : dict
+            Dictionary containing tokenizer information
+        """
+        info = {
+            'tokenizer_name': self.tokenizer_name,
+            'max_length': self.max_length,
+            'embedding_type': self.embedding_type,
+            'sinusoidal_config': self.sinusoidal_config,
+            'streaming': self.streaming,
+            'streaming_config': self.streaming_config,
+            'tokenizer_backend_config': self.tokenizer_backend_config,
+            'enable_caching': self.enable_caching,
+            'enhanced_tokenizer_available': self._enhanced_tokenizer is not None
+        }
+        
+        if self._enhanced_tokenizer is not None:
+            try:
+                info.update({
+                    'vocab_size': self._enhanced_tokenizer.get_vocab_size(),
+                    'adapter_backend': self._enhanced_tokenizer.get_adapter().config.backend,
+                    'special_tokens': self._enhanced_tokenizer.get_special_tokens()
+                })
+            except Exception as e:
+                logger.warning(f"Failed to get enhanced tokenizer info: {e}")
+        
+        return info
     
     def __sklearn_tags__(self):
         """Return sklearn tags for this classifier."""
