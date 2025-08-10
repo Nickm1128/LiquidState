@@ -492,6 +492,9 @@ def test_model_persistence(generator):
                     # Also set the response generator's tokenizer
                     if hasattr(loaded_generator, '_response_generator') and loaded_generator._response_generator:
                         loaded_generator._response_generator.tokenizer = enhanced_tokenizer
+                    # Make sure the trainer references the tokenizer as well
+                    if hasattr(loaded_generator, '_trainer') and loaded_generator._trainer:
+                        loaded_generator._trainer.tokenizer = enhanced_tokenizer
                     print("✅ Enhanced tokenizer loaded from separate file!")
                 except Exception as tokenizer_load_error:
                     print(f"⚠️ Failed to load separate tokenizer: {tokenizer_load_error}")
@@ -500,20 +503,24 @@ def test_model_persistence(generator):
                         print("🔧 Copying enhanced tokenizer from original generator...")
                         loaded_generator._enhanced_tokenizer = generator._enhanced_tokenizer
                         
-                        # Also copy the response generator's tokenizer
+                        # Also copy tokenizer references for generator components
                         if hasattr(loaded_generator, '_response_generator') and loaded_generator._response_generator:
                             loaded_generator._response_generator.tokenizer = generator._enhanced_tokenizer
-                            print("✅ Tokenizer copied successfully!")
+                        if hasattr(loaded_generator, '_trainer') and loaded_generator._trainer:
+                            loaded_generator._trainer.tokenizer = generator._enhanced_tokenizer
+                        print("✅ Tokenizer copied successfully!")
             else:
                 # Fall back to copying from original generator
                 if hasattr(generator, '_enhanced_tokenizer') and generator._enhanced_tokenizer:
                     print("🔧 Copying enhanced tokenizer from original generator...")
                     loaded_generator._enhanced_tokenizer = generator._enhanced_tokenizer
                     
-                    # Also copy the response generator's tokenizer
+                    # Also copy tokenizer references for generator components
                     if hasattr(loaded_generator, '_response_generator') and loaded_generator._response_generator:
                         loaded_generator._response_generator.tokenizer = generator._enhanced_tokenizer
-                        print("✅ Tokenizer copied successfully!")
+                    if hasattr(loaded_generator, '_trainer') and loaded_generator._trainer:
+                        loaded_generator._trainer.tokenizer = generator._enhanced_tokenizer
+                    print("✅ Tokenizer copied successfully!")
                     
         except Exception as load_error:
             print(f"❌ Model loading failed: {load_error}")
@@ -532,9 +539,11 @@ def test_model_persistence(generator):
                             enhanced_tokenizer = pickle.load(f)
                         loaded_generator._enhanced_tokenizer = enhanced_tokenizer
                         
-                        # Also set the response generator's tokenizer
+                        # Also set tokenizer references on the loaded components
                         if hasattr(loaded_generator, '_response_generator') and loaded_generator._response_generator:
                             loaded_generator._response_generator.tokenizer = enhanced_tokenizer
+                        if hasattr(loaded_generator, '_trainer') and loaded_generator._trainer:
+                            loaded_generator._trainer.tokenizer = enhanced_tokenizer
                         print("✅ Enhanced tokenizer loaded from separate file!")
                     except Exception as tokenizer_load_error:
                         print(f"⚠️ Failed to load separate tokenizer: {tokenizer_load_error}")
@@ -543,20 +552,24 @@ def test_model_persistence(generator):
                             print("🔧 Copying enhanced tokenizer from original generator...")
                             loaded_generator._enhanced_tokenizer = generator._enhanced_tokenizer
                             
-                            # Also copy the response generator's tokenizer
+                            # Also copy tokenizer references for generator components
                             if hasattr(loaded_generator, '_response_generator') and loaded_generator._response_generator:
                                 loaded_generator._response_generator.tokenizer = generator._enhanced_tokenizer
-                                print("✅ Tokenizer copied successfully!")
+                            if hasattr(loaded_generator, '_trainer') and loaded_generator._trainer:
+                                loaded_generator._trainer.tokenizer = generator._enhanced_tokenizer
+                            print("✅ Tokenizer copied successfully!")
                 else:
                     # Fall back to copying from original generator
                     if hasattr(generator, '_enhanced_tokenizer') and generator._enhanced_tokenizer:
                         print("🔧 Copying enhanced tokenizer from original generator...")
                         loaded_generator._enhanced_tokenizer = generator._enhanced_tokenizer
                         
-                        # Also copy the response generator's tokenizer
+                        # Also copy tokenizer references for generator components
                         if hasattr(loaded_generator, '_response_generator') and loaded_generator._response_generator:
                             loaded_generator._response_generator.tokenizer = generator._enhanced_tokenizer
-                            print("✅ Tokenizer copied successfully!")
+                        if hasattr(loaded_generator, '_trainer') and loaded_generator._trainer:
+                            loaded_generator._trainer.tokenizer = generator._enhanced_tokenizer
+                        print("✅ Tokenizer copied successfully!")
                         
             except Exception as alt_error:
                 print(f"❌ Alternative loading also failed: {alt_error}")
