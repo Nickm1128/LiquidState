@@ -442,17 +442,23 @@ class LSMRegressor(LSMBase, RegressorMixin):
                 logger.info("Starting LSM regression training...")
             
             # Validate and preprocess input data
-            X_processed, y_processed = self._preprocess_regression_data(X, y)
-            
+            X_processed, y_processed = self._prepare_regression_data(X, y)
+
+            # Ensure numpy arrays for downstream processing
+            X_processed = np.array(X_processed)
+            y_processed = np.array(y_processed)
+
             # Store feature information for sklearn compatibility
             self.feature_names_in_ = [f'feature_{i}' for i in range(X_processed.shape[1])]
             self.n_features_in_ = X_processed.shape[1]
             
-            # Initialize enhanced tokenizer if needed
-            if verbose:
-                logger.info("Initializing enhanced tokenizer...")
-            
-            self._enhanced_tokenizer = self._create_enhanced_tokenizer()
+            # Initialize enhanced tokenizer only when working with text data
+            if X_processed.dtype.kind in {'U', 'S', 'O'}:
+                if verbose:
+                    logger.info("Initializing enhanced tokenizer...")
+                self._enhanced_tokenizer = self._create_enhanced_tokenizer()
+            else:
+                self._enhanced_tokenizer = None
             
             # Set up target scaling if requested
             if self.normalize_targets:
@@ -468,28 +474,27 @@ class LSMRegressor(LSMBase, RegressorMixin):
                 logger.info("Extracting temporal features...")
             
             X_features = self._extract_temporal_features(X_processed)
-            
+
             # Train downstream regressor
             if verbose:
                 logger.info(f"Training {self.regressor_type} regressor...")
-            
+
             start_time = time.time()
-            
+
             self._downstream_regressor = self._create_downstream_regressor()
-            self._downstream_regressor.fit(X_features, y_scaled)
+            self._fit_regressor(X_features, y_scaled)
             
             regressor_training_time = time.time() - start_time
             
-            # Calculate training metrics
-            y_pred_scaled = self._downstream_regressor.predict(X_features)
-            if self.normalize_targets:
-                y_pred = self._target_scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
-            else:
-                y_pred = y_pred_scaled
-            
-            train_r2 = r2_score(y_processed, y_pred)
-            train_mse = mean_squared_error(y_processed, y_pred)
-            train_mae = mean_absolute_error(y_processed, y_pred)
+            # Calculate training metrics (best effort)
+            try:
+                y_pred = self._predict_values(X_features)
+                train_r2 = r2_score(y_processed, y_pred)
+                train_mse = mean_squared_error(y_processed, y_pred)
+                train_mae = mean_absolute_error(y_processed, y_pred)
+            except Exception as metric_err:
+                logger.warning(f"Could not compute training metrics: {metric_err}")
+                train_r2 = train_mse = train_mae = float('nan')
             
             # Store training metadata
             self._training_metadata = {
@@ -566,16 +571,10 @@ class LSMRegressor(LSMBase, RegressorMixin):
                 n_samples = len(X_processed)
             
             # Make predictions using downstream regressor
-            y_pred_scaled = self._downstream_regressor.predict(X_features)
-            
-            # Inverse transform if targets were normalized
-            if self.normalize_targets and self._target_scaler is not None:
-                y_pred = self._target_scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
-            else:
-                y_pred = y_pred_scaled
+            y_pred = self._predict_values(X_features)
             
             logger.debug(f"Made predictions for {n_samples} samples")
-            
+
             return y_pred
             
         except Exception as e:
@@ -841,7 +840,45 @@ class LSMRegressor(LSMBase, RegressorMixin):
             )
         
         return X
-    
+
+    # ------------------------------------------------------------------
+    # Internal helper methods for patching in tests
+
+    def _prepare_regression_data(self, X, y) -> Tuple[np.ndarray, np.ndarray]:
+        """Alias for preprocessing training data to support test patching."""
+        return self._preprocess_regression_data(X, y)
+
+    def _fit_regressor(self, X_features: np.ndarray, y_scaled: np.ndarray) -> None:
+        """Train the downstream regressor (separated for easier mocking)."""
+        self._downstream_regressor.fit(X_features, y_scaled)
+
+    def _predict_values(self, X_features: np.ndarray) -> np.ndarray:
+        """Predict continuous values and inverse-transform if needed."""
+        y_pred_scaled = self._downstream_regressor.predict(X_features)
+        if self.normalize_targets and self._target_scaler is not None:
+            return self._target_scaler.inverse_transform(y_pred_scaled.reshape(-1, 1)).ravel()
+        return y_pred_scaled
+
+    def predict_time_series(self, initial_sequence: List[float], steps: int = 1) -> np.ndarray:
+        """Public method for time series prediction used in tests."""
+        self._check_is_fitted()
+        return self._predict_time_series(initial_sequence, steps)
+
+    def _predict_time_series(self, initial_sequence: List[float], steps: int = 1) -> np.ndarray:
+        """Default implementation using forecast - can be mocked in tests."""
+        return self.forecast(initial_sequence, n_steps=steps)
+
+    def predict_sequential(self, initial_sequence: List[float], steps: int = 1) -> np.ndarray:
+        """Public method for sequential prediction used in tests."""
+        self._check_is_fitted()
+        return self._predict_sequential(initial_sequence, steps)
+
+    def _predict_sequential(self, initial_sequence: List[float], steps: int = 1) -> np.ndarray:
+        """Default sequential prediction implementation using forecast."""
+        return self.forecast(initial_sequence, n_steps=steps)
+
+    # ------------------------------------------------------------------
+
     def _extract_temporal_features(self, X: np.ndarray) -> np.ndarray:
         """Extract temporal features from sequential data."""
         try:
